@@ -1,5 +1,5 @@
 const config = require('../config/hurlburt');
-const goldenExamples = require('../config/goldenExamples');
+const goldenExamples = require('../config/golden-examples-config');
 
 /**
  * Сервис интеграции с ИИ для валидации ответов ESM
