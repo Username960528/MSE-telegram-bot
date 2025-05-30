@@ -29,7 +29,6 @@ Descriptive Experience Sampling (DES) из Exploring Inner Experience
 
 ⸻
 
-Готовый блок для вашего README.md
 
 ## Что такое Experience Sampling Method (ESM)
 
