@@ -114,7 +114,7 @@ bot.on('callback_query', async (query) => {
 });
 
 bot.on('polling_error', (error) => {
-  console.error('Polling error:', error);
+  console.error('ППPolling error:', error);
 });
 
 const startBot = async () => {
