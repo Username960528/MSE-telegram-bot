@@ -129,6 +129,9 @@ const startBot = async () => {
   notificationScheduler = new NotificationScheduler(bot);
   await notificationScheduler.initialize();
   
+  // Make scheduler globally accessible for survey completion
+  global.notificationScheduler = notificationScheduler;
+  
   console.log('MSE Bot is running...');
   console.log(`Loaded ${commands.size} commands`);
 };

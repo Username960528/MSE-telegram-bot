@@ -44,6 +44,27 @@ const userSchema = new mongoose.Schema({
   lastSurveyAt: Date,
   nextNotificationAt: Date,
   
+  // Escalation system fields
+  escalationState: {
+    isEscalating: {
+      type: Boolean,
+      default: false
+    },
+    escalationLevel: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 10
+    },
+    lastEscalationNotificationAt: Date,
+    missedNotificationsCount: {
+      type: Number,
+      default: 0
+    },
+    lastResponseAt: Date,
+    escalationStartedAt: Date
+  },
+  
   // Поля для отслеживания обучения по Херлберту
   trainingStartDate: {
     type: Date,

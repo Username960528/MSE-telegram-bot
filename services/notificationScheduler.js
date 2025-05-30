@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const moment = require('moment-timezone');
 const User = require('../models/User');
 const Response = require('../models/Response');
+const config = require('../config/hurlburt');
 
 class NotificationScheduler {
     constructor(bot) {
@@ -20,6 +21,9 @@ class NotificationScheduler {
         
         // Check for pending notifications every minute
         this.schedulePendingNotifications();
+        
+        // Check for missed notifications and handle escalation
+        this.scheduleEscalationCheck();
         
         // Plan notifications for all active users on startup
         await this.planAllUserNotifications();
@@ -285,6 +289,9 @@ class NotificationScheduler {
             response.responseStartedAt = new Date();
             await response.save();
         }
+        
+        // Reset escalation when user responds
+        await this.resetEscalation(userId);
     }
 
     /**
@@ -296,6 +303,248 @@ class NotificationScheduler {
             response.missedReason = reason;
             response.isComplete = false;
             await response.save();
+        }
+    }
+
+    /**
+     * Schedule escalation check every minute
+     */
+    scheduleEscalationCheck() {
+        cron.schedule('* * * * *', async () => {
+            await this.checkForMissedNotifications();
+            await this.processEscalations();
+        });
+    }
+
+    /**
+     * Check for missed notifications and start escalation
+     */
+    async checkForMissedNotifications() {
+        const now = new Date();
+        const timeoutMinutes = config.escalation.responseTimeoutMinutes;
+        const timeoutThreshold = new Date(now.getTime() - (timeoutMinutes * 60 * 1000));
+
+        // Find notifications that haven't been responded to
+        const missedNotifications = await Response.find({
+            notificationSentAt: { $lte: timeoutThreshold },
+            responseStartedAt: null,
+            missedReason: null
+        }).populate('userId');
+
+        for (const response of missedNotifications) {
+            const user = response.userId;
+            if (user && user.isActive && user.settings.notificationsEnabled) {
+                await this.startEscalation(user, response);
+            }
+        }
+    }
+
+    /**
+     * Start escalation for a user
+     */
+    async startEscalation(user, missedResponse) {
+        try {
+            // Initialize escalation state if not already escalating
+            if (!user.escalationState) {
+                user.escalationState = {
+                    isEscalating: false,
+                    escalationLevel: 0,
+                    missedNotificationsCount: 0
+                };
+            }
+
+            if (!user.escalationState.isEscalating) {
+                user.escalationState.isEscalating = true;
+                user.escalationState.escalationLevel = 1;
+                user.escalationState.escalationStartedAt = new Date();
+                user.escalationState.missedNotificationsCount = 1;
+                
+                console.log(`Starting escalation for user ${user.getFullName()}`);
+            } else {
+                user.escalationState.missedNotificationsCount++;
+            }
+
+            // Mark the missed response
+            missedResponse.missedReason = 'timeout_escalation';
+            await missedResponse.save();
+
+            // Schedule first escalation notification
+            await this.scheduleEscalationNotification(user);
+            await user.save();
+
+        } catch (error) {
+            console.error(`Error starting escalation for user ${user.telegramId}:`, error);
+        }
+    }
+
+    /**
+     * Process ongoing escalations
+     */
+    async processEscalations() {
+        const now = new Date();
+        
+        // Find users currently in escalation with due notifications
+        const escalatingUsers = await User.find({
+            'escalationState.isEscalating': true,
+            'escalationState.lastEscalationNotificationAt': { $lte: now }
+        });
+
+        for (const user of escalatingUsers) {
+            await this.handleEscalationNotification(user);
+        }
+    }
+
+    /**
+     * Handle escalation notification for a specific user
+     */
+    async handleEscalationNotification(user) {
+        try {
+            // Check if escalation should continue
+            if (!this.shouldContinueEscalation(user)) {
+                await this.stopEscalation(user, 'timeout_reached');
+                return;
+            }
+
+            // Send escalation notification
+            await this.sendEscalationNotification(user);
+            
+            // Increase escalation level
+            user.escalationState.escalationLevel = Math.min(
+                user.escalationState.escalationLevel + 1,
+                config.escalation.maxEscalationLevel
+            );
+
+            // Schedule next escalation notification
+            await this.scheduleEscalationNotification(user);
+            await user.save();
+
+        } catch (error) {
+            console.error(`Error handling escalation for user ${user.telegramId}:`, error);
+        }
+    }
+
+    /**
+     * Send escalation notification
+     */
+    async sendEscalationNotification(user) {
+        try {
+            const level = user.escalationState.escalationLevel;
+            const levelKey = `level${level}`;
+            
+            // Get escalation message
+            const message = config.escalation.messages[levelKey] || 
+                           config.escalation.messages.level1;
+
+            // Create response record
+            const response = new Response({
+                userId: user._id,
+                telegramId: user.telegramId,
+                notificationSentAt: new Date(),
+                metadata: {
+                    isEscalation: true,
+                    escalationLevel: level
+                }
+            });
+            await response.save();
+
+            // Send notification with escalation urgency
+            const keyboard = {
+                inline_keyboard: [[
+                    { text: '📝 Начать опрос', callback_data: `start_survey_${response._id}` },
+                    { text: '🚫 Пропустить', callback_data: `skip_survey_${response._id}` }
+                ]]
+            };
+
+            const fullMessage = `${message}\n\n` +
+                `Это займет всего 2-3 минуты. Расскажите, как вы себя чувствуете прямо сейчас.`;
+
+            await this.bot.sendMessage(user.telegramId, fullMessage, {
+                reply_markup: keyboard
+            });
+
+            console.log(`Escalation notification (level ${level}) sent to ${user.getFullName()}`);
+
+        } catch (error) {
+            console.error(`Failed to send escalation notification to user ${user.telegramId}:`, error);
+        }
+    }
+
+    /**
+     * Schedule next escalation notification
+     */
+    async scheduleEscalationNotification(user) {
+        const level = user.escalationState.escalationLevel;
+        const levelKey = `level${Math.min(level, config.escalation.maxEscalationLevel)}`;
+        const intervals = config.escalation.intervals[levelKey] || 
+                         config.escalation.intervals.level1;
+
+        // Generate random interval
+        const randomMinutes = intervals.min + 
+            Math.floor(Math.random() * (intervals.max - intervals.min + 1));
+
+        const nextNotificationTime = new Date(Date.now() + (randomMinutes * 60 * 1000));
+        user.escalationState.lastEscalationNotificationAt = nextNotificationTime;
+
+        console.log(`Next escalation notification for ${user.getFullName()} scheduled in ${randomMinutes} minutes`);
+    }
+
+    /**
+     * Check if escalation should continue
+     */
+    shouldContinueEscalation(user) {
+        const now = new Date();
+        const escalationStarted = new Date(user.escalationState.escalationStartedAt);
+        const maxHours = config.escalation.stopConditions.maxEscalationHours;
+        const maxTime = new Date(escalationStarted.getTime() + (maxHours * 60 * 60 * 1000));
+
+        // Stop if max time reached
+        if (now > maxTime) {
+            return false;
+        }
+
+        // Stop if outside time window (if configured)
+        if (config.escalation.stopConditions.respectTimeWindow) {
+            const timezone = user.settings.timezone;
+            const userNow = moment().tz(timezone);
+            const [startHour, startMinute] = user.settings.notificationStartTime.split(':').map(Number);
+            const [endHour, endMinute] = user.settings.notificationEndTime.split(':').map(Number);
+            
+            const windowStart = userNow.clone().hour(startHour).minute(startMinute);
+            const windowEnd = userNow.clone().hour(endHour).minute(endMinute);
+            
+            if (!userNow.isBetween(windowStart, windowEnd)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Stop escalation for a user
+     */
+    async stopEscalation(user, reason = 'completed') {
+        console.log(`Stopping escalation for ${user.getFullName()}: ${reason}`);
+        
+        user.escalationState.isEscalating = false;
+        user.escalationState.escalationLevel = 0;
+        user.escalationState.lastEscalationNotificationAt = null;
+        
+        if (reason === 'completed') {
+            user.escalationState.lastResponseAt = new Date();
+            user.escalationState.missedNotificationsCount = 0;
+        }
+        
+        await user.save();
+    }
+
+    /**
+     * Reset escalation when user responds
+     */
+    async resetEscalation(userId) {
+        const user = await User.findOne({ telegramId: userId });
+        if (user && user.escalationState && user.escalationState.isEscalating) {
+            await this.stopEscalation(user, 'completed');
         }
     }
 }

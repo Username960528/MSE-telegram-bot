@@ -504,6 +504,11 @@ async function completeSurvey(bot, chatId, telegramId) {
 
     surveyStates.delete(telegramId);
 
+    // Reset escalation since user completed the survey
+    if (global.notificationScheduler) {
+      await global.notificationScheduler.resetEscalation(telegramId);
+    }
+
     // Подсчитываем только основные вопросы (не follow-up)
     const mainResponses = Object.keys(state.responses).filter(key => 
       !key.startsWith('followup_')
