@@ -385,8 +385,17 @@ async function completeSurvey(bot, chatId, telegramId) {
 
     surveyStates.delete(telegramId);
 
-    const responseCount = Object.keys(state.responses).length;
+    // Подсчитываем только основные вопросы (не follow-up)
+    const mainResponses = Object.keys(state.responses).filter(key => 
+      !key.startsWith('followup_')
+    );
+    const responseCount = mainResponses.length;
     const responseTime = Math.round((Date.now() - state.startTime) / 1000);
+    
+    // Считаем follow-up отдельно
+    const followUpCount = Object.keys(state.responses).filter(key => 
+      key.startsWith('followup_')
+    ).length;
 
     // Персонализированная обратная связь
     let feedbackMessage = '';
@@ -424,7 +433,7 @@ async function completeSurvey(bot, chatId, telegramId) {
 
     // Добавляем научный факт для мотивации
     let scientificFact = '';
-    if (qualityScore >= 70 && !state.trainingDay <= TRAINING_DAYS) {
+    if (qualityScore >= 70 && state.trainingDay > TRAINING_DAYS) {
       const facts = config.scientificFacts;
       const randomFact = facts[Math.floor(Math.random() * facts.length)];
       scientificFact = `\n\n🔬 Интересный факт: ${randomFact.fact}`;
@@ -433,7 +442,8 @@ async function completeSurvey(bot, chatId, telegramId) {
     await bot.sendMessage(
       chatId,
       `✅ Спасибо за участие!\n\n` +
-      `📊 Вы ответили на ${responseCount} из ${questions.length} вопросов\n` +
+      `📊 Основные вопросы: ${responseCount} из ${questions.length}\n` +
+      (followUpCount > 0 ? `🔍 Дополнительные уточнения: ${followUpCount}\n` : '') +
       `⏱ Время заполнения: ${responseTime} секунд\n` +
       `📈 Качество данных: ${qualityScore}%` +
       feedbackMessage +
