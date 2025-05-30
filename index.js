@@ -110,6 +110,11 @@ bot.on('callback_query', async (query) => {
     await bot.sendMessage(query.message.chat.id, 
       'Опрос пропущен. Я напомню вам позже! 👍'
     );
+  } else if (query.data.startsWith('export_')) {
+    const exportCommand = commands.get('export');
+    if (exportCommand && exportCommand.handleCallback) {
+      await exportCommand.handleCallback(bot, query);
+    }
   }
 });
 
