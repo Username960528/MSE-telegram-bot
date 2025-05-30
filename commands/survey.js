@@ -3,10 +3,12 @@ const Response = require('../models/Response');
 const config = require('../config/hurlburt');
 const MomentValidator = require('../validators/momentValidator');
 const FollowUpStrategy = require('../strategies/followUpStrategy');
+const PatternFeedback = require('../helpers/patternFeedback');
 
 const surveyStates = new Map();
 const validator = new MomentValidator();
 const followUpStrategy = new FollowUpStrategy();
+const patternFeedback = new PatternFeedback();
 
 // Получаем параметры из конфига
 const TRAINING_DAYS = config.training.DAYS;
@@ -431,6 +433,19 @@ async function completeSurvey(bot, chatId, telegramId) {
       }
     }
 
+    // Добавляем итеративную обратную связь о паттернах
+    let patternInsights = '';
+    if (state.trainingDay > TRAINING_DAYS) {
+      try {
+        const user = await User.findOne({ telegramId });
+        if (user) {
+          patternInsights = await patternFeedback.generateIterativeFeedback(user._id, response) || '';
+        }
+      } catch (error) {
+        console.error('Error generating pattern feedback:', error);
+      }
+    }
+    
     // Добавляем научный факт для мотивации
     let scientificFact = '';
     if (qualityScore >= 70 && state.trainingDay > TRAINING_DAYS) {
@@ -447,6 +462,7 @@ async function completeSurvey(bot, chatId, telegramId) {
       `⏱ Время заполнения: ${responseTime} секунд\n` +
       `📈 Качество данных: ${qualityScore}%` +
       feedbackMessage +
+      patternInsights +
       scientificFact +
       `\n\nИспользуйте /stats для просмотра вашей статистики.`,
       {
