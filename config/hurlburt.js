@@ -52,6 +52,10 @@ module.exports = {
 
   // Паттерны для валидации
   validation: {
+    // Включить золотой стандарт валидации
+    useGoldenStandard: true,
+    strictMode: false,
+    
     // Мусорные паттерны
     garbage: {
       generic: [

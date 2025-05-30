@@ -1,5 +1,16 @@
 const config = require('../config/hurlburt');
 const goldenExamples = require('../config/golden-examples-config');
+const crypto = require('crypto');
+const { startValidation, endValidation, recordValidationError, recordAIUsage, recordCacheHit, recordCacheMiss } = require('../utils/metrics');
+
+// Graceful shutdown handler
+process.on('SIGINT', () => {
+  console.log('Shutting down AI Validator...');
+  if (global.aiValidator) {
+    global.aiValidator.cleanup();
+  }
+  process.exit(0);
+});
 
 /**
  * Сервис интеграции с ИИ для валидации ответов ESM
@@ -11,8 +22,23 @@ class AIValidatorService {
     this.isConfigured = false;
     this.provider = null;
     this.cache = new Map(); // Кэш для экономии API запросов
+    this.rateLimiter = new Map(); // Rate limiting для предотвращения злоупотреблений
+    this.requestQueue = []; // Очередь запросов
+    this.isProcessingQueue = false;
+    
+    // Настройки по умолчанию
+    this.defaultSettings = {
+      timeout: 30000, // 30 секунд для Claude
+      maxRetries: 3,
+      cacheTTL: 24 * 60 * 60 * 1000, // 24 часа
+      rateLimit: {
+        requests: 10,
+        window: 60000 // 1 минута
+      }
+    };
     
     this.initializeProvider();
+    this.startCacheCleanup();
   }
 
   /**
@@ -58,51 +84,54 @@ class AIValidatorService {
   }
 
   /**
-   * Основная функция валидации через ИИ
+   * Основная функция валидации через ИИ с улучшенной обработкой ошибок
    */
   async validate(text, context = {}) {
     if (!this.config.enableSmartValidation) {
       return null;
     }
 
-    // Проверяем кэш
-    const cacheKey = this.getCacheKey(text, context);
-    if (this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey);
+    // Начинаем отслеживание метрик
+    const userId = context.userId || 'anonymous';
+    const timerId = startValidation(userId, 'ai_validation');
+
+    // Проверяем rate limit
+    if (!this.checkRateLimit(userId)) {
+      console.warn(`Rate limit exceeded for user ${userId}`);
+      const localResult = await this.validateLocally(text, context);
+      endValidation(timerId, localResult);
+      return localResult;
     }
 
+    // Проверяем кэш
+    const cacheKey = this.getCacheKey(text, context);
+    const cached = this.getCachedResult(cacheKey);
+    if (cached) {
+      recordCacheHit();
+      endValidation(timerId, cached);
+      return cached;
+    }
+
+    recordCacheMiss();
     let result;
     
     try {
-      switch (this.provider) {
-        case 'openai':
-          result = await this.validateWithOpenAI(text, context);
-          break;
-        case 'anthropic':
-          result = await this.validateWithAnthropic(text, context);
-          break;
-        case 'local':
-          result = await this.validateLocally(text, context);
-          break;
-        default:
-          result = null;
-      }
+      // Graceful degradation with timeout
+      result = await this.validateWithRetries(text, context);
       
-      // Кэшируем результат
+      // Кэшируем результат с TTL
       if (result) {
-        this.cache.set(cacheKey, result);
-        
-        // Очищаем старый кэш если слишком большой
-        if (this.cache.size > 1000) {
-          const firstKey = this.cache.keys().next().value;
-          this.cache.delete(firstKey);
-        }
+        this.setCachedResult(cacheKey, result);
       }
       
+      endValidation(timerId, result);
       return result;
     } catch (error) {
-      console.error('AI Validation error:', error);
-      return this.validateLocally(text, context);
+      console.error('AI Validation failed, falling back to local:', error);
+      recordValidationError(error, timerId);
+      
+      const localResult = await this.validateLocally(text, context);
+      return localResult;
     }
   }
 
@@ -110,49 +139,78 @@ class AIValidatorService {
    * Валидация через OpenAI GPT-4
    */
   async validateWithOpenAI(text, context) {
+    if (!this.openai) {
+      throw new Error('OpenAI not configured');
+    }
+    
     const prompt = this.constructPrompt(text, context);
     
-    const completion = await this.openai.createChatCompletion({
-      model: "gpt-4-turbo-preview",
-      messages: [
-        {
-          role: "system",
-          content: this.getSystemPrompt()
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      temperature: 0.3,
-      max_tokens: 500,
-      response_format: { type: "json_object" }
-    });
+    try {
+      const completion = await this.openai.createChatCompletion({
+        model: "gpt-4-turbo-preview",
+        messages: [
+          {
+            role: "system",
+            content: this.getSystemPrompt()
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 500,
+        response_format: { type: "json_object" }
+      });
 
-    const response = completion.data.choices[0].message.content;
-    return this.parseAIResponse(response);
+      const response = completion.data.choices[0]?.message?.content;
+      if (!response) {
+        throw new Error('Empty response from OpenAI');
+      }
+      
+      recordAIUsage('openai', true);
+      return this.parseAIResponse(response);
+    } catch (error) {
+      console.error('OpenAI API error:', error);
+      recordAIUsage('openai', false);
+      throw error;
+    }
   }
 
   /**
    * Валидация через Anthropic Claude
    */
   async validateWithAnthropic(text, context) {
+    if (!this.anthropic) {
+      throw new Error('Anthropic not configured');
+    }
+    
     const prompt = this.constructPrompt(text, context);
     
-    const message = await this.anthropic.messages.create({
-      model: 'claude-3-opus-20240229',
-      max_tokens: 500,
-      temperature: 0.3,
-      system: this.getSystemPrompt(),
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        }
-      ]
-    });
+    try {
+      const message = await this.anthropic.messages.create({
+        model: 'claude-3-opus-20240229',
+        max_tokens: 1000,
+        temperature: 0.3,
+        system: this.getSystemPrompt(),
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      });
 
-    return this.parseAIResponse(message.content[0].text);
+      const responseText = message.content?.[0]?.text;
+      if (!responseText) {
+        throw new Error('Empty response from Anthropic');
+      }
+      
+      return this.parseAIResponse(responseText);
+    } catch (error) {
+      console.error('Anthropic API error:', error);
+      throw error;
+    }
   }
 
   /**
@@ -207,38 +265,40 @@ class AIValidatorService {
    * Системный промпт для ИИ
    */
   getSystemPrompt() {
-    return `You are an expert validator for the Experience Sampling Method (ESM) based on Russell Hurlburt's research.
+    return `Вы эксперт по валидации ответов для метода Experience Sampling Method (ESM) на основе исследований Рассела Херлберта.
 
-Your task is to evaluate how well a person described their momentary conscious experience.
+Ваша задача - оценить, насколько хорошо человек описал свой моментальный сознательный опыт.
 
-Key principles from Hurlburt:
-1. MOMENT over period - response should describe a specific instant
-2. SENSORY DETAILS over abstractions - what they saw/heard/felt
-3. BODY doesn't lie - physical sensations are more reliable than thoughts
-4. EMPTINESS is also experience - don't make things up
-5. Reading inner speech exists in only 3% of samples (Hurlburt & Heavey, 2018)
+Ключевые принципы Херлберта:
+1. МОМЕНТ, а не период - ответ должен описывать конкретный миг
+2. СЕНСОРНЫЕ ДЕТАЛИ, а не абстракции - что видел/слышал/чувствовал
+3. ТЕЛО не лжет - физические ощущения надежнее мыслей
+4. ПУСТОТА тоже опыт - не надо придумывать
+5. Внутренняя речь при чтении есть только в 3% случаев (Hurlburt & Heavey, 2018)
 
-Red flags:
-- "usually", "always", "often" = generalization
-- "interesting", "boring" = abstraction
-- "all day", "morning" = not a moment
-- "probably", "I think" = theorizing
-- "nothing special" = avoidance
+Красные флаги (плохо):
+- "обычно", "всегда", "часто" = обобщение
+- "интересно", "скучно" = абстракция  
+- "весь день", "утром" = не момент
+- "наверное", "думаю" = теоретизирование
+- "ничего особенного" = избегание
 
-Golden signs:
-- Specific moment indicated
-- Sensory details present
-- Bodily sensations described
-- Direct speech of thoughts
-- Acknowledged emptiness when it was there
+Золотые признаки (хорошо):
+- Указан конкретный момент
+- Есть сенсорные детали
+- Описаны телесные ощущения
+- Прямая речь мыслей
+- Признана пустота, если она была
 
-Respond with a JSON object containing:
+ВАЖНО: Отвечайте ТОЛЬКО валидным JSON на русском языке. Не включайте никакого текста до или после JSON объекта.
+
+Отвечайте в точно такой JSON структуре:
 {
   "score": 0-100,
   "quality": "pristine|excellent|good|fair|poor|garbage",
-  "issues": ["list", "of", "detected", "issues"],
-  "suggestions": ["specific", "actionable", "suggestions"],
-  "phenomena": ["detected", "Hurlburt", "phenomena"],
+  "issues": ["список", "обнаруженных", "проблем"],
+  "suggestions": ["конкретные", "практические", "рекомендации"],
+  "phenomena": ["обнаруженные", "феномены", "Херлберта"],
   "educationalValue": 0-1,
   "confidence": 0-1
 }`;
@@ -248,27 +308,27 @@ Respond with a JSON object containing:
    * Конструирование промпта для ИИ
    */
   constructPrompt(text, context) {
-    let prompt = `Evaluate this ESM response:\n\n`;
-    prompt += `Response: "${text}"\n\n`;
+    let prompt = `Оцените этот ответ ESM:\n\n`;
+    prompt += `Ответ: "${text}"\n\n`;
     
     if (context.detectedContext) {
-      prompt += `Context: ${context.detectedContext}\n`;
+      prompt += `Контекст: ${context.detectedContext}\n`;
     }
     
     if (context.trainingDay) {
-      prompt += `Training day: ${context.trainingDay}\n`;
+      prompt += `День обучения: ${context.trainingDay}\n`;
     }
     
     if (context.previousResponses) {
-      prompt += `Note: User has tendency to ${this.detectUserTendencies(context.previousResponses)}\n`;
+      prompt += `Примечание: У пользователя есть тенденция ${this.detectUserTendencies(context.previousResponses)}\n`;
     }
     
-    prompt += `\nProvide detailed analysis focusing on Hurlburt's criteria.`;
+    prompt += `\nПроведите детальный анализ, фокусируясь на критериях Херлберта.`;
     
     // Добавляем примеры из золотого стандарта для контекста
     if (context.detectedContext && goldenExamples.examples[context.detectedContext]) {
       const examples = goldenExamples.examples[context.detectedContext];
-      prompt += `\n\nExcellent example for reference: "${examples.excellent[0].text}"`;
+      prompt += `\n\nПример отличного ответа для справки: "${examples.excellent[0].text}"`;
     }
     
     return prompt;
@@ -304,25 +364,81 @@ Respond with a JSON object containing:
    */
   parseAIResponse(response) {
     try {
-      // Пытаемся распарсить JSON
-      const parsed = JSON.parse(response);
+      // Очищаем ответ от лишних символов
+      let cleanResponse = response.trim().replace(/```json\n?|```\n?/g, '');
       
-      // Валидация структуры
+      // Ищем JSON объект в тексте
+      const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleanResponse = jsonMatch[0];
+      }
+      
+      // Пытаемся распарсить JSON
+      const parsed = JSON.parse(cleanResponse);
+      
+      // Строгая валидация структуры
       const validated = {
-        score: Math.max(0, Math.min(100, parsed.score || 50)),
-        quality: parsed.quality || 'fair',
-        issues: Array.isArray(parsed.issues) ? parsed.issues : [],
-        suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
-        phenomena: Array.isArray(parsed.phenomena) ? parsed.phenomena : [],
-        educationalValue: parsed.educationalValue || 0.5,
-        confidence: parsed.confidence || 0.7
+        score: this.validateNumber(parsed.score, 0, 100, 50),
+        quality: this.validateQuality(parsed.quality),
+        issues: this.validateArray(parsed.issues),
+        suggestions: this.validateArray(parsed.suggestions),
+        phenomena: this.validateArray(parsed.phenomena),
+        educationalValue: this.validateNumber(parsed.educationalValue, 0, 1, 0.5),
+        confidence: this.validateNumber(parsed.confidence, 0, 1, 0.7),
+        timestamp: Date.now(),
+        provider: this.provider
       };
       
       return validated;
     } catch (error) {
-      console.error('Failed to parse AI response:', error);
-      return null;
+      console.error('Failed to parse AI response:', {
+        error: error.message,
+        response: response?.substring(0, 200),
+        provider: this.provider
+      });
+      return this.createFallbackResponse();
     }
+  }
+
+  /**
+   * Валидация числовых значений
+   */
+  validateNumber(value, min, max, defaultValue) {
+    const num = parseFloat(value);
+    if (isNaN(num)) return defaultValue;
+    return Math.max(min, Math.min(max, num));
+  }
+
+  /**
+   * Валидация качества
+   */
+  validateQuality(quality) {
+    const validQualities = ['pristine', 'excellent', 'good', 'fair', 'poor', 'garbage'];
+    return validQualities.includes(quality) ? quality : 'fair';
+  }
+
+  /**
+   * Валидация массивов
+   */
+  validateArray(arr) {
+    return Array.isArray(arr) ? arr.filter(item => typeof item === 'string') : [];
+  }
+
+  /**
+   * Создание fallback ответа при ошибке парсинга
+   */
+  createFallbackResponse() {
+    return {
+      score: 50,
+      quality: 'fair',
+      issues: ['ai_parsing_error'],
+      suggestions: ['Попробуйте быть более конкретным'],
+      phenomena: [],
+      educationalValue: 0.3,
+      confidence: 0.3,
+      timestamp: Date.now(),
+      provider: 'fallback'
+    };
   }
 
   /**
@@ -333,20 +449,30 @@ Respond with a JSON object containing:
       return null;
     }
 
-    const prompt = `Based on this ESM response, generate ONE follow-up question to help the person observe their experience more accurately:
+    // Проверяем лимит follow-up вопросов
+    if (context.followUpCount >= 2) {
+      return null; // Максимум 2 follow-up вопроса
+    }
 
-Response: "${text}"
-Context: ${context.detectedContext || 'unknown'}
+    const prompt = `На основе этого ответа ESM, сгенерируйте ОДИН уточняющий вопрос на русском языке, чтобы помочь человеку точнее наблюдать свой опыт:
 
-The question should:
-- Be short (under 20 words)
-- Focus on sensory experience
-- Not be accusatory
-- Help break through common illusions
+Ответ: "${text}"
+Контекст: ${context.detectedContext || 'неизвестен'}
+Количество предыдущих уточнений: ${context.followUpCount || 0}
 
-If the response is already excellent, return null.
+Вопрос должен:
+- Быть коротким (до 15 слов)
+- Фокусироваться на сенсорном опыте
+- Не быть обвиняющим
+- Помочь преодолеть иллюзии
 
-Respond with JSON: {"question": "..." } or {"question": null}`;
+НЕ задавайте вопрос если:
+- Ответ уже содержит конкретные сенсорные детали
+- Пользователь уже описал физические ощущения подробно
+- Ответ содержит более 20 слов с хорошими деталями
+- Пользователь раздражен или говорит "я уже сказал"
+
+Отвечайте JSON: {"question": "..." } или {"question": null}`;
 
     try {
       let result;
@@ -355,7 +481,7 @@ Respond with JSON: {"question": "..." } or {"question": null}`;
         const completion = await this.openai.createChatCompletion({
           model: "gpt-4-turbo-preview",
           messages: [
-            { role: "system", content: "You are an expert in Descriptive Experience Sampling." },
+            { role: "system", content: "Вы эксперт по Descriptive Experience Sampling. Отвечайте только на русском языке." },
             { role: "user", content: prompt }
           ],
           temperature: 0.7,
@@ -364,7 +490,7 @@ Respond with JSON: {"question": "..." } or {"question": null}`;
         result = completion.data.choices[0].message.content;
       } else if (this.provider === 'anthropic') {
         const message = await this.anthropic.messages.create({
-          model: 'claude-3-sonnet-20240229',
+          model: 'claude-sonnet-4-20250514',
           max_tokens: 100,
           temperature: 0.7,
           messages: [{ role: 'user', content: prompt }]
@@ -421,7 +547,139 @@ Respond with actionable insights in JSON format.`;
    * Получение ключа кэша
    */
   getCacheKey(text, context) {
-    return `${text.substring(0, 50)}_${context.detectedContext || 'none'}_${context.trainingDay || 0}`;
+    const crypto = require('crypto');
+    const hash = crypto.createHash('md5')
+      .update(`${text}_${context.detectedContext || 'none'}_${context.trainingDay || 0}`)
+      .digest('hex');
+    return hash.substring(0, 16);
+  }
+
+  /**
+   * Получение результата из кэша с проверкой TTL
+   */
+  getCachedResult(cacheKey) {
+    const cached = this.cache.get(cacheKey);
+    if (!cached) return null;
+    
+    // Проверяем TTL
+    if (Date.now() - cached.timestamp > this.defaultSettings.cacheTTL) {
+      this.cache.delete(cacheKey);
+      return null;
+    }
+    
+    return cached.data;
+  }
+
+  /**
+   * Сохранение результата в кэш с timestamp
+   */
+  setCachedResult(cacheKey, result) {
+    this.cache.set(cacheKey, {
+      data: result,
+      timestamp: Date.now()
+    });
+    
+    // Ограничиваем размер кэша
+    if (this.cache.size > 1000) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+  }
+
+  /**
+   * Проверка rate limit
+   */
+  checkRateLimit(userId) {
+    const now = Date.now();
+    const userRequests = this.rateLimiter.get(userId) || [];
+    
+    // Очищаем старые запросы
+    const recentRequests = userRequests.filter(
+      timestamp => now - timestamp < this.defaultSettings.rateLimit.window
+    );
+    
+    if (recentRequests.length >= this.defaultSettings.rateLimit.requests) {
+      return false;
+    }
+    
+    recentRequests.push(now);
+    this.rateLimiter.set(userId, recentRequests);
+    return true;
+  }
+
+  /**
+   * Валидация с повторными попытками и timeout
+   */
+  async validateWithRetries(text, context, attempt = 1) {
+    const maxRetries = this.defaultSettings.maxRetries;
+    
+    try {
+      // Timeout обёртка
+      const result = await Promise.race([
+        this.validateWithProvider(text, context),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), this.defaultSettings.timeout)
+        )
+      ]);
+      
+      return result;
+    } catch (error) {
+      console.warn(`AI validation attempt ${attempt} failed:`, error.message);
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff
+        const delay = Math.pow(2, attempt) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.validateWithRetries(text, context, attempt + 1);
+      }
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Выбор провайдера для валидации
+   */
+  async validateWithProvider(text, context) {
+    switch (this.provider) {
+      case 'openai':
+        return await this.validateWithOpenAI(text, context);
+      case 'anthropic':
+        return await this.validateWithAnthropic(text, context);
+      case 'local':
+        return await this.validateLocally(text, context);
+      default:
+        throw new Error('No valid provider configured');
+    }
+  }
+
+  /**
+   * Периодическая очистка кэша
+   */
+  startCacheCleanup() {
+    setInterval(() => {
+      const now = Date.now();
+      for (const [key, value] of this.cache.entries()) {
+        if (now - value.timestamp > this.defaultSettings.cacheTTL) {
+          this.cache.delete(key);
+        }
+      }
+      
+      // Очищаем rate limiter
+      for (const [userId, requests] of this.rateLimiter.entries()) {
+        const recentRequests = requests.filter(
+          timestamp => now - timestamp < this.defaultSettings.rateLimit.window
+        );
+        
+        if (recentRequests.length === 0) {
+          this.rateLimiter.delete(userId);
+        } else {
+          this.rateLimiter.set(userId, recentRequests);
+        }
+      }
+      
+      console.log(`Cache cleanup: ${this.cache.size} entries, ${this.rateLimiter.size} rate limit entries`);
+    }, 60 * 60 * 1000); // Каждый час
   }
 
   /**
@@ -434,6 +692,20 @@ Respond with actionable insights in JSON format.`;
     if (score >= 60) return 'fair';
     if (score >= 40) return 'poor';
     return 'garbage';
+  }
+
+  /**
+   * Получение статистики использования
+   */
+  getUsageStats() {
+    return {
+      cacheSize: this.cache.size,
+      rateLimitEntries: this.rateLimiter.size,
+      provider: this.provider,
+      isConfigured: this.isConfigured,
+      uptime: process.uptime(),
+      lastCacheCleanup: this.lastCacheCleanup || 'never'
+    };
   }
 
   /**
@@ -458,11 +730,22 @@ Respond with actionable insights in JSON format.`;
       data: trainingData,
       metadata: {
         totalSamples: trainingData.length,
-        agreementRate: trainingData.filter(d => d.agreement).length / trainingData.length,
+        agreementRate: trainingData.length > 0 ? 
+          trainingData.filter(d => d.agreement).length / trainingData.length : 0,
         exportDate: new Date(),
-        modelVersion: this.config.ml.modelVersion || '1.0'
+        modelVersion: this.config?.ml?.modelVersion || '1.0',
+        provider: this.provider
       }
     };
+  }
+
+  /**
+   * Очистка ресурсов при завершении
+   */
+  cleanup() {
+    this.cache.clear();
+    this.rateLimiter.clear();
+    console.log('AI Validator cleanup completed');
   }
 }
 

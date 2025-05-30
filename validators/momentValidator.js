@@ -229,7 +229,17 @@ class MomentValidator {
     // Простая проверка на схожесть с предыдущими ответами
     const threshold = 0.7; // 70% схожести
     
+    // Безопасная обработка массива
+    if (!previousResponses || !Array.isArray(previousResponses)) {
+      return { isRepeat: false };
+    }
+    
     for (const prev of previousResponses.slice(-5)) { // Проверяем последние 5
+      // Пропускаем невалидные элементы
+      if (!prev || typeof prev !== 'string') {
+        continue;
+      }
+      
       const similarity = this.calculateSimilarity(text, prev);
       if (similarity > threshold) {
         return { isRepeat: true, similarity };
@@ -243,6 +253,11 @@ class MomentValidator {
    * Простой расчёт схожести текстов
    */
   calculateSimilarity(text1, text2) {
+    // Безопасная проверка входных данных
+    if (!text1 || !text2 || typeof text1 !== 'string' || typeof text2 !== 'string') {
+      return 0;
+    }
+    
     const words1 = text1.split(/\s+/);
     const words2 = text2.split(/\s+/);
     

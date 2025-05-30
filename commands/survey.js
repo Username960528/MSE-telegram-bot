@@ -6,6 +6,7 @@ const goldenStandard = require('../validators/goldenStandard');
 const aiValidator = require('../services/ai-validator-service');
 const FollowUpStrategy = require('../strategies/followUpStrategy');
 const PatternFeedback = require('../helpers/patternFeedback');
+const { recordUserResponse, recordTrainingCompletion, recordTrainingDropout, recordIllusionDetected } = require('../utils/metrics');
 
 const surveyStates = new Map();
 const validator = new MomentValidator();
@@ -342,7 +343,8 @@ async function handleTextResponseWithGoldenStandard(bot, msg, state) {
         return true;
       }
       
-      // Переходим к следующему вопросу
+      // Сбрасываем счетчик follow-up и переходим к следующему вопросу
+      state.followUpCount = 0;
       await askQuestion(bot, chatId, telegramId, state.currentQuestion + 1);
     }
     
@@ -411,6 +413,9 @@ async function handleTextResponse(bot, msg, state) {
 
     // Ответ прошёл валидацию или валидация не требуется
     state.responses[question.id] = msg.text;
+    
+    // Записываем метрики
+    recordUserResponse(telegramId);
 
     // Положительная обратная связь за хороший ответ
     if (question.validation && msg.text.length > 30) {
@@ -590,6 +595,9 @@ async function completeSurvey(bot, chatId, telegramId) {
 
     // Дополнительное сообщение для мотивации
     if (state.trainingDay === 3) {
+      // Записываем метрики завершения обучения
+      recordTrainingCompletion(qualityScore);
+      
       setTimeout(() => {
         bot.sendMessage(chatId,
           `🎉 Поздравляем! Завтра начнётся основной сбор данных.\n\n` +
@@ -874,15 +882,20 @@ async function checkForFollowUp(bot, chatId, state, context) {
   if (!followUp && config.ai && config.ai.enableSmartValidation && aiValidator.generateFollowUp) {
     const lastResponse = Object.values(state.responses).pop();
     if (lastResponse?.text) {
+      // Инициализируем счетчик follow-up если его нет
+      if (!state.followUpCount) state.followUpCount = 0;
+      
       const aiFollowUp = await aiValidator.generateFollowUp(
         lastResponse.text,
         {
           detectedContext: lastResponse.goldenStandard?.detectedContext,
-          quality: lastResponse.quality
+          quality: lastResponse.quality,
+          followUpCount: state.followUpCount
         }
       );
       
       if (aiFollowUp) {
+        state.followUpCount++; // Увеличиваем счетчик
         return {
           text: aiFollowUp,
           source: 'ai',
@@ -932,9 +945,10 @@ async function handleFollowUpResponse(bot, msg, state) {
     await bot.sendMessage(chatId, '👍 Понятно, спасибо за уточнение.');
   }
   
-  // Сбрасываем флаг и продолжаем
+  // Сбрасываем флаги и продолжаем
   state.expectingFollowUp = false;
   state.pendingFollowUp = null;
+  state.followUpCount = 0; // Сбрасываем счетчик для следующего вопроса
   
   // Переходим к следующему вопросу
   const telegramId = msg.from.id;
