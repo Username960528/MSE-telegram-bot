@@ -42,7 +42,89 @@ const userSchema = new mongoose.Schema({
     default: true
   },
   lastSurveyAt: Date,
-  nextNotificationAt: Date
+  nextNotificationAt: Date,
+  
+  // Поля для отслеживания обучения по Херлберту
+  trainingStartDate: {
+    type: Date,
+    default: null
+  },
+  currentTrainingDay: {
+    type: Number,
+    default: 0
+  },
+  trainingCompleted: {
+    type: Boolean,
+    default: false
+  },
+
+  // Метрики качества данных
+  averageDataQuality: {
+    type: Number,
+    default: 0
+  },
+  totalResponses: {
+    type: Number,
+    default: 0
+  },
+  qualityHistory: [{
+    date: Date,
+    score: Number,
+    responsesCount: Number,
+    dayNumber: Number
+  }],
+
+  // Обнаруженные паттерны и феномены Херлберта
+  phenomenaFrequencies: {
+    innerSpeech: { type: Number, default: 0 },
+    innerSeeing: { type: Number, default: 0 },
+    unsymbolizedThinking: { type: Number, default: 0 },
+    feeling: { type: Number, default: 0 },
+    sensoryAwareness: { type: Number, default: 0 }
+  },
+
+  // Паттерны ответов для персонализации
+  commonPatterns: {
+    usesInnerSpeech: { type: Boolean, default: null },
+    tendencyToGeneralize: { type: Number, default: 0 }, // 0-1
+    introspectiveAccuracy: { type: Number, default: 0 }, // 0-1
+    preferredResponseLength: { type: Number, default: 0 },
+
+    // Специфичные иллюзии
+    readingVoiceIllusion: { type: Boolean, default: null },
+    emotionAsThought: { type: Boolean, default: null },
+
+    // Сильные стороны
+    sensoryDetailRichness: { type: Number, default: 0 }, // 0-1
+    momentCaptureAbility: { type: Number, default: 0 }, // 0-1
+    emptinessRecognition: { type: Number, default: 0 } // 0-1
+  },
+
+  // Настройки персонализации
+  preferences: {
+    receiveQualityFeedback: { type: Boolean, default: true },
+    showExamples: { type: Boolean, default: true },
+    adaptiveQuestions: { type: Boolean, default: true },
+    trainingReminders: { type: Boolean, default: true },
+    useAIValidation: { type: Boolean, default: true }
+  },
+
+  // Достижения и прогресс
+  achievements: [{
+    type: {
+      type: String,
+      enum: [
+        'first_pristine_experience',
+        'illusion_breaker',
+        'sensory_master',
+        'emptiness_recognizer',
+        'consistency_champion',
+        'training_graduate'
+      ]
+    },
+    unlockedAt: Date,
+    description: String
+  }]
 });
 
 userSchema.methods.getFullName = function() {

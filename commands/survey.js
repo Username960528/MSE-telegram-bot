@@ -2,11 +2,15 @@ const User = require('../models/User');
 const Response = require('../models/Response');
 const config = require('../config/hurlburt');
 const MomentValidator = require('../validators/momentValidator');
+const goldenStandard = require('../validators/goldenStandard');
+const aiValidator = require('../services/ai-validator-service');
 const FollowUpStrategy = require('../strategies/followUpStrategy');
 const PatternFeedback = require('../helpers/patternFeedback');
+const { recordUserResponse, recordTrainingCompletion, recordTrainingDropout, recordIllusionDetected } = require('../utils/metrics');
 
 const surveyStates = new Map();
 const validator = new MomentValidator();
+const momentValidator = new MomentValidator();
 const followUpStrategy = new FollowUpStrategy();
 const patternFeedback = new PatternFeedback();
 
@@ -251,10 +255,120 @@ async function askQuestion(bot, chatId, telegramId, questionIndex) {
   }
 }
 
-// Обработка текстовых ответов с валидацией
+// Обработка текстовых ответов с полной валидацией (золотой стандарт)
+async function handleTextResponseWithGoldenStandard(bot, msg, state) {
+  const chatId = msg.chat.id;
+  const telegramId = msg.from.id;
+  const question = questions[state.currentQuestion];
+  
+  if (question && question.type === 'text') {
+    const responseStartTime = Date.now();
+    
+    // Получаем контекст для валидации
+    const user = await User.findOne({ telegramId });
+    const context = {
+      trainingDay: user.currentTrainingDay || 1,
+      previousResponses: Object.values(state.responses).map(r => r.text || r.value),
+      currentActivity: state.responses.currentActivity?.text,
+      questionType: question.validation
+    };
+    
+    // 1. Базовая валидация через momentValidator
+    const baseValidation = momentValidator.validate(
+      msg.text, 
+      question.validation || 'general',
+      context
+    );
+    
+    // 2. Улучшение через золотой стандарт
+    const enhancedValidation = goldenStandard.enhance(
+      baseValidation,
+      msg.text,
+      context
+    );
+    
+    // 3. Глубокая валидация через ИИ (если доступно и нужно)
+    let aiValidation = null;
+    if (config.ai && config.ai.enableSmartValidation && 
+        enhancedValidation.score > 30 && 
+        enhancedValidation.score < 80) {
+      
+      aiValidation = await aiValidator.validate(msg.text, {
+        ...context,
+        detectedContext: enhancedValidation.goldenStandard?.detectedContext
+      });
+    }
+    
+    // Комбинируем результаты валидации
+    const finalValidation = combineValidations(
+      enhancedValidation, 
+      aiValidation
+    );
+    
+    // Обрабатываем результат валидации
+    const isAccepted = await processValidationResult(
+      bot, 
+      chatId, 
+      msg.text,
+      finalValidation, 
+      state,
+      context
+    );
+    
+    if (isAccepted) {
+      // Сохраняем полные данные ответа
+      state.responses[question.id] = {
+        text: msg.text,
+        timestamp: new Date(),
+        responseTime: Date.now() - responseStartTime,
+        quality: finalValidation.quality,
+        score: finalValidation.score,
+        validation: {
+          base: baseValidation.score,
+          golden: enhancedValidation.goldenStandard?.score,
+          ai: aiValidation?.score,
+          final: finalValidation.score
+        },
+        phenomena: finalValidation.phenomena,
+        goldenStandard: enhancedValidation.goldenStandard
+      };
+      
+      // Проверяем, нужен ли follow-up вопрос
+      const followUp = await checkForFollowUp(bot, chatId, state, context);
+      
+      if (followUp) {
+        state.pendingFollowUp = followUp;
+        state.expectingFollowUp = true;
+        await bot.sendMessage(chatId, followUp.text);
+        return true;
+      }
+      
+      // Сбрасываем счетчик follow-up и переходим к следующему вопросу
+      state.followUpCount = 0;
+      await askQuestion(bot, chatId, telegramId, state.currentQuestion + 1);
+    }
+    
+    return true;
+  }
+  
+  // Проверяем, не ответ ли это на follow-up
+  if (state.expectingFollowUp && state.pendingFollowUp) {
+    await handleFollowUpResponse(bot, msg, state);
+    return true;
+  }
+  
+  return false;
+}
+
+// Оригинальная обработка текстовых ответов с валидацией
 async function handleTextResponse(bot, msg, state) {
   const chatId = msg.chat.id;
   const telegramId = msg.from.id;
+
+  // Если включен золотой стандарт, используем улучшенную версию
+  if (config.validation && config.validation.useGoldenStandard) {
+    return await handleTextResponseWithGoldenStandard(bot, msg, state);
+  }
 
   // Если это follow-up ответ
   if (state.followUpPending) {
@@ -299,6 +413,9 @@ async function handleTextResponse(bot, msg, state) {
 
     // Ответ прошёл валидацию или валидация не требуется
     state.responses[question.id] = msg.text;
+    
+    // Записываем метрики
+    recordUserResponse(telegramId);
 
     // Положительная обратная связь за хороший ответ
     if (question.validation && msg.text.length > 30) {
@@ -478,6 +595,9 @@ async function completeSurvey(bot, chatId, telegramId) {
 
     // Дополнительное сообщение для мотивации
     if (state.trainingDay === 3) {
+      // Записываем метрики завершения обучения
+      recordTrainingCompletion(qualityScore);
+      
       setTimeout(() => {
         bot.sendMessage(chatId,
           `🎉 Поздравляем! Завтра начнётся основной сбор данных.\n\n` +
@@ -585,5 +705,416 @@ module.exports = {
     }
   },
 
-  handleTextResponse
+  handleTextResponse,
+  handleTextResponseWithGoldenStandard,
+  
+  // Новые функции золотого стандарта
+  combineValidations,
+  processValidationResult,
+  sendPositiveFeedback,
+  sendEducationalFeedback,
+  checkForFollowUp,
+  handleFollowUpResponse,
+  extractPhenomena,
+  calculateValidationStats,
+  updateUserStats,
+  sendCompletionMessage,
+  getQualityEmoji,
+  checkAndCelebrateProgress
 };
+
+/**
+ * Функции золотого стандарта
+ */
+
+/**
+ * Комбинирование результатов валидации
+ */
+function combineValidations(enhanced, ai) {
+  if (!ai) return enhanced;
+  
+  // Взвешенное комбинирование с учётом уверенности ИИ
+  const aiWeight = ai.confidence || 0.5;
+  const baseWeight = 1 - aiWeight;
+  
+  const combinedScore = Math.round(
+    enhanced.score * baseWeight + 
+    ai.score * aiWeight
+  );
+  
+  return {
+    ...enhanced,
+    score: combinedScore,
+    quality: goldenStandard.getQualityLevel ? goldenStandard.getQualityLevel(combinedScore) : 'unknown',
+    phenomena: [...new Set([
+      ...enhanced.phenomena || [],
+      ...(ai.phenomena || [])
+    ])],
+    aiInsights: ai.suggestions,
+    aiConfidence: ai.confidence
+  };
+}
+
+/**
+ * Обработка результата валидации
+ */
+async function processValidationResult(bot, chatId, text, validation, state, context) {
+  const attemptKey = `q_${state.currentQuestion}`;
+  state.validationAttempts[attemptKey] = (state.validationAttempts[attemptKey] || 0) + 1;
+  
+  // Определяем пороги в зависимости от дня обучения
+  const acceptanceThreshold = context.trainingDay <= 2 ? 30 : 40;
+  const maxAttempts = context.trainingDay <= 2 ? 3 : 2;
+  
+  // Если качество приемлемое - принимаем
+  if (validation.score >= acceptanceThreshold) {
+    await sendPositiveFeedback(bot, chatId, validation, context);
+    return true;
+  }
+  
+  // Если превышены попытки - принимаем с оговоркой
+  if (state.validationAttempts[attemptKey] >= maxAttempts) {
+    await bot.sendMessage(
+      chatId,
+      '📝 Записано. ' + (validation.feedback || 'Продолжайте практиковаться!')
+    );
+    return true;
+  }
+  
+  // Показываем обучающую обратную связь
+  await sendEducationalFeedback(bot, chatId, validation, context);
+  
+  // Если есть похожие примеры - показываем
+  if (validation.goldenStandard?.similarExamples?.length > 0 && 
+      context.trainingDay <= 2) {
+    
+    const example = validation.goldenStandard.similarExamples[0];
+    if (example.quality === 'excellent' || example.quality === 'good') {
+      await bot.sendMessage(
+        chatId,
+        `💡 Пример ${example.quality === 'excellent' ? 'отличного' : 'хорошего'} ответа:\n` +
+        `"${example.text}"\n\n` +
+        `Попробуйте ещё раз с большей конкретикой.`
+      );
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Отправка позитивной обратной связи
+ */
+async function sendPositiveFeedback(bot, chatId, validation, context) {
+  let message = '';
+  
+  if (validation.quality === 'pristine' || validation.quality === 'excellent') {
+    message = '🌟 Превосходно! ';
+    
+    // Объясняем почему это хорошо в дни обучения
+    if (context.trainingDay <= 3) {
+      const patterns = validation.goldenStandard?.matchedPatterns?.positive || [];
+      if (patterns.length > 0) {
+        const patternNames = patterns.slice(0, 3).map(p => p.name).join(', ');
+        message += `\n\nЧто делает ваш ответ отличным: ${patternNames}`;
+      }
+    }
+  } else if (validation.quality === 'good') {
+    message = '✅ Хорошее наблюдение!';
+  } else {
+    message = '👍 Записано.';
+  }
+  
+  // Добавляем мотивирующий факт
+  if (Math.random() < 0.3 && validation.score > 70 && config.scientificFacts) {
+    const fact = config.scientificFacts[
+      Math.floor(Math.random() * config.scientificFacts.length)
+    ];
+    if (fact && fact.fact) {
+      message += `\n\n💡 Интересный факт: ${fact.fact}`;
+    }
+  }
+  
+  await bot.sendMessage(chatId, message);
+}
+
+/**
+ * Отправка обучающей обратной связи
+ */
+async function sendEducationalFeedback(bot, chatId, validation, context) {
+  let message = validation.feedback || 
+    '🔍 Попробуйте описать более конкретно. Что ИМЕННО происходило?';
+  
+  // Добавляем специфичные подсказки на основе обнаруженных проблем
+  if (validation.goldenStandard?.matchedPatterns?.negative?.length > 0) {
+    const mainIssue = validation.goldenStandard.matchedPatterns.negative[0];
+    
+    // Добавляем иллюстрацию проблемы
+    switch (mainIssue.category) {
+      case 'garbage':
+        message += '\n\n❌ Избегайте: обобщений и оценок';
+        message += '\n✅ Опишите: конкретный момент';
+        break;
+      case 'illusion':
+        if (mainIssue.name === 'reading_voice_illusion') {
+          message += '\n\n📊 Факт: исследования показывают, что 97% чтения происходит БЕЗ внутреннего голоса!';
+        }
+        break;
+    }
+  }
+  
+  await bot.sendMessage(chatId, message);
+}
+
+/**
+ * Проверка необходимости follow-up вопроса
+ */
+async function checkForFollowUp(bot, chatId, state, context) {
+  // Используем стратегию follow-up
+  const followUp = followUpStrategy.getNextQuestion({
+    responses: state.responses,
+    currentQuestion: state.currentQuestion,
+    userId: state.userId,
+    trainingDay: context.trainingDay
+  });
+  
+  // Если стратегия не дала вопрос, пробуем ИИ
+  if (!followUp && config.ai && config.ai.enableSmartValidation && aiValidator.generateFollowUp) {
+    const lastResponse = Object.values(state.responses).pop();
+    if (lastResponse?.text) {
+      // Инициализируем счетчик follow-up если его нет
+      if (!state.followUpCount) state.followUpCount = 0;
+      
+      const aiFollowUp = await aiValidator.generateFollowUp(
+        lastResponse.text,
+        {
+          detectedContext: lastResponse.goldenStandard?.detectedContext,
+          quality: lastResponse.quality,
+          followUpCount: state.followUpCount
+        }
+      );
+      
+      if (aiFollowUp) {
+        state.followUpCount++; // Увеличиваем счетчик
+        return {
+          text: aiFollowUp,
+          source: 'ai',
+          clarifies: 'ai_generated'
+        };
+      }
+    }
+  }
+  
+  return followUp;
+}
+
+/**
+ * Обработка ответа на follow-up вопрос
+ */
+async function handleFollowUpResponse(bot, msg, state) {
+  const chatId = msg.chat.id;
+  const followUp = state.pendingFollowUp;
+  
+  // Анализируем ответ
+  const analysis = followUpStrategy.analyzeFollowUpResponse(
+    msg.text,
+    followUp,
+    { responses: state.responses }
+  );
+  
+  // Сохраняем follow-up ответ
+  const lastQuestionId = Object.keys(state.responses).pop();
+  if (state.responses[lastQuestionId]) {
+    state.responses[lastQuestionId].followUp = {
+      question: followUp.text,
+      answer: msg.text,
+      analysis: analysis
+    };
+  }
+  
+  // Даём обратную связь
+  if (analysis.illusionBroken) {
+    await bot.sendMessage(
+      chatId,
+      '💡 Отлично! Вы заметили разницу. ' + 
+      (analysis.recommendations?.[0] || '')
+    );
+  } else if (analysis.insightGained) {
+    await bot.sendMessage(chatId, '✅ Хорошее уточнение!');
+  } else {
+    await bot.sendMessage(chatId, '👍 Понятно, спасибо за уточнение.');
+  }
+  
+  // Сбрасываем флаги и продолжаем
+  state.expectingFollowUp = false;
+  state.pendingFollowUp = null;
+  state.followUpCount = 0; // Сбрасываем счетчик для следующего вопроса
+  
+  // Переходим к следующему вопросу
+  const telegramId = msg.from.id;
+  await askQuestion(bot, chatId, telegramId, state.currentQuestion + 1);
+}
+
+/**
+ * Вспомогательные функции
+ */
+
+function extractPhenomena(responses) {
+  const phenomena = [];
+  
+  Object.values(responses).forEach(r => {
+    if (r.phenomena) {
+      phenomena.push(...r.phenomena);
+    }
+  });
+  
+  // Подсчитываем частоты
+  const counts = {};
+  phenomena.forEach(p => {
+    counts[p] = (counts[p] || 0) + 1;
+  });
+  
+  return counts;
+}
+
+function calculateValidationStats(responses) {
+  const stats = {
+    averageScore: 0,
+    averageResponseTime: 0,
+    validationAttempts: 0,
+    followUpsCompleted: 0
+  };
+  
+  let scoreSum = 0;
+  let timeSum = 0;
+  let count = 0;
+  
+  Object.values(responses).forEach(r => {
+    if (r.score !== undefined) {
+      scoreSum += r.score;
+      count++;
+    }
+    if (r.responseTime) {
+      timeSum += r.responseTime;
+    }
+    if (r.followUp) {
+      stats.followUpsCompleted++;
+    }
+  });
+  
+  stats.averageScore = count > 0 ? Math.round(scoreSum / count) : 0;
+  stats.averageResponseTime = count > 0 ? Math.round(timeSum / count) : 0;
+  
+  return stats;
+}
+
+async function updateUserStats(user, response) {
+  if (!user || !response) return;
+  
+  // Обновляем качество
+  const newQualityEntry = {
+    date: new Date(),
+    score: response.dataQualityScore || 0,
+    responsesCount: Object.keys(response.responses || {}).length
+  };
+  
+  if (!user.qualityHistory) user.qualityHistory = [];
+  user.qualityHistory.push(newQualityEntry);
+  
+  // Обновляем среднее качество
+  const recentScores = user.qualityHistory
+    .slice(-10)
+    .map(h => h.score);
+  
+  if (recentScores.length > 0) {
+    user.averageDataQuality = recentScores.reduce((a, b) => a + b, 0) / recentScores.length;
+  }
+  
+  user.totalResponses = (user.totalResponses || 0) + 1;
+  
+  // Обновляем паттерны если есть ИИ анализ
+  if (config.ai && config.ai.enablePatternDetection && user.totalResponses >= 10 && aiValidator.analyzeUserPatterns) {
+    try {
+      const patterns = await aiValidator.analyzeUserPatterns(
+        user._id,
+        user.qualityHistory.slice(-20)
+      );
+      
+      if (patterns) {
+        user.commonPatterns = patterns;
+      }
+    } catch (error) {
+      console.error('Error analyzing user patterns:', error);
+    }
+  }
+  
+  await user.save();
+}
+
+async function sendCompletionMessage(bot, chatId, state, quality, recommendations) {
+  const responseCount = Object.keys(state.responses).length;
+  const responseTime = Math.round((Date.now() - state.startTime) / 1000);
+  
+  let message = `✅ Спасибо за участие!\n\n`;
+  message += `📊 Статистика:\n`;
+  message += `├ Ответов: ${responseCount} из ${questions.length}\n`;
+  message += `├ Время: ${responseTime} сек\n`;
+  message += `└ Качество: ${getQualityEmoji(quality)} ${Math.round(quality)}%\n\n`;
+  
+  // Персонализированная обратная связь
+  if (quality >= 80) {
+    message += `🌟 Превосходное качество наблюдений!\n`;
+  } else if (quality >= 60) {
+    message += `👍 Хорошая работа! Продолжайте совершенствоваться.\n`;
+  } else {
+    message += `📚 Есть куда расти. Практика - ключ к мастерству!\n`;
+  }
+  
+  // Рекомендации
+  if (recommendations && recommendations.length > 0) {
+    message += `\n💡 Рекомендации:\n`;
+    recommendations.slice(0, 2).forEach(rec => {
+      message += `• ${rec.suggestion || rec}\n`;
+    });
+  }
+  
+  message += `\nИспользуйте /stats для детальной статистики.`;
+  
+  await bot.sendMessage(chatId, message, {
+    reply_markup: {
+      keyboard: [
+        ['📚 Помощь', '📊 Памятка'],
+        ['🔊 Эхо', '📈 Статистика']
+      ],
+      resize_keyboard: true
+    }
+  });
+}
+
+function getQualityEmoji(score) {
+  if (score >= 80) return '🌟';
+  if (score >= 60) return '✅';
+  if (score >= 40) return '🟡';
+  return '🔴';
+}
+
+async function checkAndCelebrateProgress(bot, chatId, user) {
+  // Сравниваем с предыдущими днями
+  if (!user.qualityHistory || user.qualityHistory.length < 2) return;
+  
+  const today = user.qualityHistory.slice(-1)[0];
+  const yesterday = user.qualityHistory.slice(-2, -1)[0];
+  
+  const improvement = today.score - yesterday.score;
+  
+  if (improvement > 20) {
+    setTimeout(() => {
+      bot.sendMessage(
+        chatId,
+        `🎉 Вау! Качество ваших наблюдений улучшилось на ${Math.round(improvement)}%!\n\n` +
+        `Вы действительно начинаете различать моментальный опыт от мыслей о нём. ` +
+        `Это редкий навык! 🌟`
+      );
+    }, 2000);
+  }
+}
