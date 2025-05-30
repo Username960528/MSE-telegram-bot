@@ -35,8 +35,8 @@ module.exports = {
       const keyboard = {
         reply_markup: {
           keyboard: [
-            ['📚 Help', '📊 Info'],
-            ['📈 Stats', '🔔 Survey']
+            ['📚 Помощь', '📊 Памятка'],
+            ['📈 Статистика', '🔔 Опрос']
           ],
           resize_keyboard: true,
           one_time_keyboard: false

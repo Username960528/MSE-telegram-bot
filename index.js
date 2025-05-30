@@ -51,33 +51,33 @@ bot.on('message', async (msg) => {
       if (handled) return;
     }
     
-    if (msg.text === '📚 Help') {
+    if (msg.text === '📚 Помощь') {
       const helpCommand = commands.get('help');
       if (helpCommand) helpCommand.execute(bot, msg);
-    } else if (msg.text === '📊 Info') {
+    } else if (msg.text === '📊 Памятка') {
       const infoCommand = commands.get('info');
       if (infoCommand) infoCommand.execute(bot, msg);
-    } else if (msg.text === '🔊 Echo') {
-      bot.sendMessage(msg.chat.id, 'Please use /echo followed by your text. Example: /echo Hello World');
-    } else if (msg.text === '📈 Stats') {
+    } else if (msg.text === '🔊 Эхо') {
+      bot.sendMessage(msg.chat.id, 'Используйте /echo с текстом. Пример: /echo Привет мир');
+    } else if (msg.text === '📈 Статистика') {
       const statsCommand = commands.get('stats');
       if (statsCommand) {
         statsCommand.execute(bot, msg);
       } else {
         bot.sendMessage(msg.chat.id, 'Команда /stats ещё в разработке');
       }
-    } else if (msg.text === '🔔 Survey') {
+    } else if (msg.text === '🔔 Опрос') {
       const surveyCommand = commands.get('survey');
       if (surveyCommand) {
         surveyCommand.execute(bot, msg);
       }
     } else if (!msg.text.startsWith('/') && 
-               msg.text !== '📚 Help' && 
-               msg.text !== '📊 Info' && 
-               msg.text !== '🔊 Echo' &&
-               msg.text !== '📈 Stats' &&
-               msg.text !== '🔔 Survey') {
-      bot.sendMessage(msg.chat.id, `You said: "${msg.text}"\n\nUse /help or the keyboard buttons to see available commands.`);
+               msg.text !== '📚 Помощь' && 
+               msg.text !== '📊 Памятка' && 
+               msg.text !== '🔊 Эхо' &&
+               msg.text !== '📈 Статистика' &&
+               msg.text !== '🔔 Опрос') {
+      bot.sendMessage(msg.chat.id, `Вы написали: "${msg.text}"\n\nИспользуйте /help или кнопки клавиатуры для просмотра доступных команд.`);
     }
   }
 });

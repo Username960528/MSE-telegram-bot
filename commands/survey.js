@@ -146,8 +146,8 @@ async function completeSurvey(bot, chatId, telegramId) {
       {
         reply_markup: {
           keyboard: [
-            ['📚 Help', '📊 Info'],
-            ['🔊 Echo', '📈 Stats']
+            ['📚 Помощь', '📊 Памятка'],
+            ['🔊 Эхо', '📈 Статистика']
           ],
           resize_keyboard: true
         }
