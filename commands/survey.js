@@ -5,6 +5,24 @@ const surveyStates = new Map();
 
 const questions = [
   {
+    id: 'challenge',
+    text: '📈 Насколько сложна текущая задача?',
+    type: 'scale',
+    scale: { min: 0, max: 9, minLabel: 'Очень легко', maxLabel: 'Очень сложно' }
+  },
+  {
+    id: 'skill',
+    text: '🛠 Насколько высоки ваши навыки для этой задачи?',
+    type: 'scale',
+    scale: { min: 0, max: 9, minLabel: 'Очень низкие', maxLabel: 'Очень высокие' }
+  },
+  {
+    id: 'concentration',
+    text: '🎯 Насколько вы сконцентрированы?',
+    type: 'scale',
+    scale: { min: 0, max: 9, minLabel: 'Совсем не сконцентрирован', maxLabel: 'Полностью сконцентрирован' }
+  },
+  {
     id: 'mood',
     text: '🌈 Как вы себя чувствуете прямо сейчас?',
     type: 'scale',
@@ -23,37 +41,31 @@ const questions = [
     scale: { min: 1, max: 7, minLabel: 'Расслаблен', maxLabel: 'Очень напряжён' }
   },
   {
-    id: 'focus',
-    text: '🎯 Насколько вы сфокусированы?',
-    type: 'scale',
-    scale: { min: 1, max: 7, minLabel: 'Рассеян', maxLabel: 'Полностью сосредоточен' }
-  },
-  {
-    id: 'currentThoughts',
-    text: '💭 Опишите в 2-3 словах, о чём думаете прямо сейчас:',
-    type: 'text'
-  },
-  {
     id: 'currentActivity',
     text: '📝 Что вы делаете в данный момент?',
     type: 'text'
   },
   {
-    id: 'currentEmotions',
-    text: '😊 Какие эмоции испытываете?',
+    id: 'currentCompanion',
+    text: '👥 С кем вы сейчас?',
     type: 'text'
   }
 ];
 
 function createScaleKeyboard(min, max) {
   const keyboard = [];
-  const row = [];
+  const buttonsPerRow = max - min + 1 > 7 ? 5 : 7;
+  let row = [];
   
   for (let i = min; i <= max; i++) {
     row.push({ text: i.toString(), callback_data: `survey_scale_${i}` });
+    
+    if (row.length === buttonsPerRow || i === max) {
+      keyboard.push([...row]);
+      row = [];
+    }
   }
   
-  keyboard.push(row);
   keyboard.push([{ text: '❌ Отменить', callback_data: 'survey_cancel' }]);
   
   return {
