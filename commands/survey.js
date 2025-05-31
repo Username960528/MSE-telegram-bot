@@ -527,6 +527,26 @@ async function completeSurvey(bot, chatId, telegramId) {
           bot.sendMessage(chatId, gamificationMessage);
         }, 2000);
       }
+      
+      // Добавляем быстрый инсайт после опроса (для опытных пользователей)
+      if (user.totalResponses >= 10 && state.trainingDay > TRAINING_DAYS) {
+        setTimeout(async () => {
+          try {
+            const AIInsightsService = require('../services/ai-insights-service');
+            const quickInsight = await AIInsightsService.generateQuickInsight(user._id);
+            
+            if (quickInsight && quickInsight.message) {
+              await bot.sendMessage(chatId, 
+                `💡 <b>Быстрый инсайт:</b>\n${quickInsight.emoji} ${quickInsight.message}\n\n` +
+                `Для подробного анализа используйте /insights`, 
+                { parse_mode: 'HTML' }
+              );
+            }
+          } catch (error) {
+            console.error('Error generating quick insight:', error);
+          }
+        }, 4000);
+      }
     }
 
     surveyStates.delete(telegramId);
@@ -619,7 +639,7 @@ async function completeSurvey(bot, chatId, telegramId) {
           keyboard: [
             ['📚 Помощь', '📊 Памятка'],
             ['🏆 Достижения', '📊 Рейтинги'],
-            ['🔊 Эхо', '📈 Статистика']
+            ['🧠 Инсайты', '📈 Статистика']
           ],
           resize_keyboard: true
         }
