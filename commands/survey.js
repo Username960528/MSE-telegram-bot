@@ -6,6 +6,7 @@ const goldenStandard = require('../validators/goldenStandard');
 const aiValidator = require('../services/ai-validator-service');
 const FollowUpStrategy = require('../strategies/followUpStrategy');
 const PatternFeedback = require('../helpers/patternFeedback');
+const GamificationService = require('../services/gamification-service');
 const { recordUserResponse, recordTrainingCompletion, recordTrainingDropout, recordIllusionDetected } = require('../utils/metrics');
 
 const surveyStates = new Map();
@@ -503,6 +504,23 @@ async function completeSurvey(bot, chatId, telegramId) {
     response.responseCompletedAt = new Date();
     await response.save();
 
+    // Геймификация: обрабатываем ответ пользователя
+    const user = await User.findOne({ telegramId });
+    if (user) {
+      const gamificationResult = await GamificationService.processResponse(user, response);
+      
+      // Генерируем мотивационные сообщения
+      const motivationalMessages = GamificationService.generateMotivationalMessage(user, gamificationResult);
+      
+      // Отправляем мотивационные сообщения отдельно
+      if (motivationalMessages.length > 0) {
+        setTimeout(() => {
+          const gamificationMessage = motivationalMessages.join('\n');
+          bot.sendMessage(chatId, gamificationMessage);
+        }, 2000);
+      }
+    }
+
     surveyStates.delete(telegramId);
 
     // Reset escalation since user completed the survey
@@ -592,6 +610,7 @@ async function completeSurvey(bot, chatId, telegramId) {
         reply_markup: {
           keyboard: [
             ['📚 Помощь', '📊 Памятка'],
+            ['🏆 Достижения', '📊 Рейтинги'],
             ['🔊 Эхо', '📈 Статистика']
           ],
           resize_keyboard: true

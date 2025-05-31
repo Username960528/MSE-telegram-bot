@@ -66,6 +66,16 @@ bot.on('message', async (msg) => {
       } else {
         bot.sendMessage(msg.chat.id, 'Команда /stats ещё в разработке');
       }
+    } else if (msg.text === '🏆 Достижения') {
+      const achievementsCommand = commands.get('achievements');
+      if (achievementsCommand) {
+        achievementsCommand.execute(bot, msg);
+      }
+    } else if (msg.text === '📊 Рейтинги') {
+      const leaderboardCommand = commands.get('leaderboard');
+      if (leaderboardCommand) {
+        leaderboardCommand.execute(bot, msg);
+      }
     } else if (msg.text === '🔔 Опрос') {
       const surveyCommand = commands.get('survey');
       if (surveyCommand) {
@@ -76,6 +86,8 @@ bot.on('message', async (msg) => {
                msg.text !== '📊 Памятка' && 
                msg.text !== '🔊 Эхо' &&
                msg.text !== '📈 Статистика' &&
+               msg.text !== '🏆 Достижения' &&
+               msg.text !== '📊 Рейтинги' &&
                msg.text !== '🔔 Опрос') {
       bot.sendMessage(msg.chat.id, `Вы написали: "${msg.text}"\n\nИспользуйте /help или кнопки клавиатуры для просмотра доступных команд.`);
     }
@@ -114,6 +126,39 @@ bot.on('callback_query', async (query) => {
     const exportCommand = commands.get('export');
     if (exportCommand && exportCommand.handleCallback) {
       await exportCommand.handleCallback(bot, query);
+    }
+  } else if (query.data.startsWith('leaderboards') || query.data.includes('leaderboard')) {
+    const leaderboardCommand = commands.get('leaderboard');
+    if (leaderboardCommand) {
+      await bot.answerCallbackQuery(query.id);
+      await leaderboardCommand.execute(bot, query.message);
+    }
+  } else if (query.data.startsWith('my_achievements') || query.data.includes('achievements')) {
+    const achievementsCommand = commands.get('achievements');
+    if (achievementsCommand) {
+      await bot.answerCallbackQuery(query.id);
+      await achievementsCommand.execute(bot, query.message);
+    }
+  } else if (query.data.startsWith('stats')) {
+    const statsCommand = commands.get('stats');
+    if (statsCommand) {
+      await bot.answerCallbackQuery(query.id);
+      await statsCommand.execute(bot, query.message);
+    }
+  } else if (query.data.startsWith('refresh_')) {
+    // Обновление различных разделов
+    if (query.data === 'refresh_achievements') {
+      const achievementsCommand = commands.get('achievements');
+      if (achievementsCommand) {
+        await bot.answerCallbackQuery(query.id, { text: 'Обновлено!' });
+        await achievementsCommand.execute(bot, query.message);
+      }
+    } else if (query.data === 'refresh_leaderboard') {
+      const leaderboardCommand = commands.get('leaderboard');
+      if (leaderboardCommand) {
+        await bot.answerCallbackQuery(query.id, { text: 'Обновлено!' });
+        await leaderboardCommand.execute(bot, query.message);
+      }
     }
   }
 });
