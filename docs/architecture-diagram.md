@@ -13,11 +13,11 @@ graph TB
     
     subgraph "📋 Команды"
         START[start - Регистрация]
-        SURVEY[/survey - Опрос]
-        STATS[/stats - Статистика]
-        SETTINGS[/settings - Настройки]
-        EXPORT[/export - Экспорт]
-        HELP[/help - Помощь]
+        SURVEY[survey - Опрос]
+        STATS[stats - Статистика]
+        SETTINGS[settings - Настройки]
+        EXPORT[export - Экспорт]
+        HELP[help - Помощь]
     end
     
     subgraph "🧠 Валидация и ИИ"
