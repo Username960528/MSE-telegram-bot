@@ -81,6 +81,11 @@ bot.on('message', async (msg) => {
       if (insightsCommand) {
         insightsCommand.execute(bot, msg);
       }
+    } else if (msg.text === '📰 Новости') {
+      const newsCommand = commands.get('news');
+      if (newsCommand) {
+        newsCommand.execute(bot, msg);
+      }
     } else if (msg.text === '🔔 Опрос') {
       const surveyCommand = commands.get('survey');
       if (surveyCommand) {
@@ -94,6 +99,7 @@ bot.on('message', async (msg) => {
                msg.text !== '🏆 Достижения' &&
                msg.text !== '📊 Рейтинги' &&
                msg.text !== '🧠 Инсайты' &&
+               msg.text !== '📰 Новости' &&
                msg.text !== '🔔 Опрос') {
       bot.sendMessage(msg.chat.id, `Вы написали: "${msg.text}"\n\nИспользуйте /help или кнопки клавиатуры для просмотра доступных команд.`);
     }
@@ -159,6 +165,11 @@ bot.on('callback_query', async (query) => {
         await insightsCommand.execute(bot, query.message);
       } else if (insightsCommand.handleCallback) {
         await insightsCommand.handleCallback(bot, query);
+      }
+    } else if (query.data.startsWith('try_') || query.data === 'close_news' || query.data === 'show_help') {
+      const newsCommand = commands.get('news');
+      if (newsCommand && newsCommand.handleCallback) {
+        await newsCommand.handleCallback(bot, query);
       }
     }
   } else if (query.data.startsWith('refresh_')) {
