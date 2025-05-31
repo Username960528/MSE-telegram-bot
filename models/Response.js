@@ -112,6 +112,48 @@ const responseSchema = new mongoose.Schema({
       of: Number
     },
     
+    // DES-specific metadata for junk data detection
+    dataReliability: {
+      reliabilityScore: {
+        type: Number,
+        min: 0,
+        max: 100,
+        default: 0
+      },
+      junkDataFlags: [{
+        type: {
+          type: String,
+          enum: ['first_day_unreliable', 'learning_curve', 'pattern_inconsistency', 'validation_failure', 'illusion_detected']
+        },
+        severity: {
+          type: String,
+          enum: ['low', 'medium', 'high', 'critical']
+        },
+        description: String,
+        detectedAt: {
+          type: Date,
+          default: Date.now
+        }
+      }],
+      excludeFromAnalysis: {
+        type: Boolean,
+        default: false
+      },
+      exclusionReason: String
+    },
+
+    // Progressive learning indicators
+    learningProgress: {
+      conceptsUnderstood: [String],
+      illusionsBroken: [String],
+      skillsAcquired: [String],
+      breakthroughMoments: [{
+        concept: String,
+        timestamp: Date,
+        evidence: String
+      }]
+    },
+
     // Гибкое хранилище для будущих расширений
     additionalData: {
       type: Map,
