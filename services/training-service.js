@@ -2,6 +2,10 @@ const User = require('../models/User');
 const TrainingProgress = require('../models/TrainingProgress');
 const config = require('../config/hurlburt');
 const goldenExamples = require('../config/goldenExamples');
+const adaptiveCoach = require('./adaptive-training-coach');
+const weaknessAnalyzer = require('./weakness-analyzer');
+const exerciseGenerator = require('./personalized-exercise-generator');
+const durationCalculator = require('./adaptive-duration-calculator');
 
 /**
  * Сервис управления процессом обучения по методу Херлберта
@@ -13,9 +17,11 @@ class TrainingService {
   }
 
   /**
-   * Инициализация обучения для нового пользователя
+   * Инициализация обучения для нового пользователя с адаптивным планированием
    */
   async initializeTraining(userId, telegramId) {
+    console.log(`🎓 Initializing adaptive training for user ${userId}`);
+    
     // Создаём запись прогресса
     const progress = new TrainingProgress({
       userId,
@@ -33,6 +39,15 @@ class TrainingService {
     });
 
     await progress.save();
+
+    // Инициализируем адаптивный план обучения
+    try {
+      const initialPlan = await adaptiveCoach.adaptTrainingPlan(userId, progress);
+      console.log(`📋 Initial adaptive plan created: ${initialPlan.recommendedDuration} days, ${initialPlan.learningProfile} profile`);
+    } catch (error) {
+      console.error('Error creating initial adaptive plan:', error);
+      // Продолжаем со стандартным планом
+    }
 
     // Обновляем пользователя
     await User.findByIdAndUpdate(userId, {
@@ -453,6 +468,272 @@ class TrainingService {
       'avoidance': 'Избегание наблюдения'
     };
     return names[issueType] || issueType;
+  }
+
+  /**
+   * НОВЫЕ АДАПТИВНЫЕ МЕТОДЫ
+   */
+
+  /**
+   * Получить адаптивный план обучения для пользователя
+   */
+  async getAdaptiveTrainingPlan(userId) {
+    try {
+      return await adaptiveCoach.getAdaptivePlan(userId);
+    } catch (error) {
+      console.error('Error getting adaptive plan:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Обновить план обучения на основе нового прогресса
+   */
+  async updateAdaptiveTrainingPlan(userId, newResponse) {
+    try {
+      const updatedPlan = await adaptiveCoach.updatePlanBasedOnProgress(userId, newResponse);
+      if (updatedPlan) {
+        console.log(`🔄 Adaptive plan updated for user ${userId}`);
+        return updatedPlan;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error updating adaptive plan:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Анализ слабостей пользователя
+   */
+  async analyzeUserWeaknesses(userId, depth = 'comprehensive') {
+    try {
+      return await weaknessAnalyzer.analyzeUserWeaknesses(userId, depth);
+    } catch (error) {
+      console.error('Error analyzing user weaknesses:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Генерация персональных упражнений
+   */
+  async generatePersonalizedExercises(userId, weaknessProfile, context = {}) {
+    try {
+      return await exerciseGenerator.generatePersonalizedExercises(userId, weaknessProfile, context);
+    } catch (error) {
+      console.error('Error generating personalized exercises:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Расчет адаптивной длительности обучения
+   */
+  async calculateAdaptiveDuration(userId, currentProgress, context = {}) {
+    try {
+      return await durationCalculator.calculateAdaptiveDuration(userId, currentProgress, context);
+    } catch (error) {
+      console.error('Error calculating adaptive duration:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Получить персонализированное сообщение дня с учетом адаптивного плана
+   */
+  async getAdaptiveDailyMessage(userId, day) {
+    try {
+      // Сначала пытаемся получить персональное сообщение
+      const adaptivePlan = await this.getAdaptiveTrainingPlan(userId);
+      
+      if (adaptivePlan?.customMessages) {
+        const timeOfDay = new Date().getHours() < 18 ? 'morning' : 'encouragement';
+        const messages = adaptivePlan.customMessages[timeOfDay];
+        
+        if (messages && messages.length > 0) {
+          // Выбираем случайное сообщение из персональных
+          const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+          return `${randomMessage}\n\n💡 Ваш фокус сегодня: ${adaptivePlan.dailyFocus[`day${day}`] || 'общее развитие'}`;
+        }
+      }
+      
+      // Fallback к стандартным сообщениям
+      return await this.getDailyMessage(userId, day);
+    } catch (error) {
+      console.error('Error getting adaptive daily message:', error);
+      return await this.getDailyMessage(userId, day);
+    }
+  }
+
+  /**
+   * Проверка готовности к выпуску с учетом адаптивных критериев
+   */
+  async checkAdaptiveGraduation(userId, progress) {
+    try {
+      // Получаем адаптивный план
+      const adaptivePlan = await this.getAdaptiveTrainingPlan(userId);
+      
+      if (!adaptivePlan) {
+        // Fallback к стандартной проверке
+        return progress.isReadyToGraduate();
+      }
+
+      const currentDay = progress.getCurrentDay();
+      
+      // Проверяем достижение рекомендуемой длительности
+      if (currentDay < adaptivePlan.recommendedDuration) {
+        return false;
+      }
+      
+      // Проверяем достижение качественных целей
+      const currentQuality = progress.getAverageQuality();
+      if (currentQuality < adaptivePlan.qualityTarget) {
+        return false;
+      }
+      
+      // Проверяем решение основных слабостей
+      const weaknessAnalysis = await this.analyzeUserWeaknesses(userId, 'quick');
+      if (weaknessAnalysis) {
+        const criticalWeaknesses = weaknessAnalysis.primaryWeaknesses.filter(w => 
+          w.severity > 0.7 && adaptivePlan.weaknessTargets.includes(w.type)
+        );
+        
+        if (criticalWeaknesses.length > 0) {
+          console.log(`❌ Critical weaknesses still present: ${criticalWeaknesses.map(w => w.type).join(', ')}`);
+          return false;
+        }
+      }
+      
+      console.log(`✅ User ${userId} ready for adaptive graduation`);
+      return true;
+      
+    } catch (error) {
+      console.error('Error checking adaptive graduation:', error);
+      // Fallback к стандартной проверке
+      return progress.isReadyToGraduate();
+    }
+  }
+
+  /**
+   * Получить расширенный статус обучения с адаптивными данными
+   */
+  async getAdaptiveTrainingStatus(userId) {
+    try {
+      // Получаем базовый статус
+      const baseStatus = await this.getTrainingStatus(userId);
+      
+      // Добавляем адаптивные данные
+      const adaptivePlan = await this.getAdaptiveTrainingPlan(userId);
+      const weaknessAnalysis = await this.analyzeUserWeaknesses(userId, 'quick');
+      
+      if (adaptivePlan) {
+        baseStatus.adaptiveData = {
+          learningProfile: adaptivePlan.learningProfile,
+          recommendedDuration: adaptivePlan.recommendedDuration,
+          qualityTarget: adaptivePlan.qualityTarget,
+          currentFocus: adaptivePlan.dailyFocus[`day${baseStatus.currentDay}`],
+          weaknessTargets: adaptivePlan.weaknessTargets,
+          planConfidence: adaptivePlan.metadata?.confidence || 0.5
+        };
+      }
+      
+      if (weaknessAnalysis) {
+        baseStatus.weaknessData = {
+          primaryWeaknesses: weaknessAnalysis.primaryWeaknesses.slice(0, 3),
+          riskLevel: weaknessAnalysis.riskFactors?.length > 2 ? 'high' : 'medium',
+          confidence: weaknessAnalysis.confidence
+        };
+      }
+      
+      return baseStatus;
+      
+    } catch (error) {
+      console.error('Error getting adaptive training status:', error);
+      return await this.getTrainingStatus(userId);
+    }
+  }
+
+  /**
+   * Генерация интеллектуальных рекомендаций после ответа
+   */
+  async generateSmartRecommendations(userId, response) {
+    try {
+      const adaptivePlan = await this.getAdaptiveTrainingPlan(userId);
+      const recommendations = [];
+      
+      if (!adaptivePlan) return [];
+      
+      // Анализируем качество ответа относительно плана
+      const qualityScore = response.metadata?.dataQualityScore || 50;
+      const targetQuality = adaptivePlan.qualityTarget || 70;
+      
+      if (qualityScore < targetQuality - 20) {
+        // Ищем подходящие упражнения из плана
+        const todayExercises = adaptivePlan.personalizedExercises[`day${response.metadata?.trainingDay || 1}`];
+        if (todayExercises && todayExercises.length > 0) {
+          const exercise = todayExercises[0];
+          recommendations.push({
+            type: 'exercise',
+            priority: 'high',
+            message: `💪 Попробуйте упражнение: "${exercise.title}"`,
+            details: exercise.description,
+            target: exercise.target
+          });
+        }
+      }
+      
+      // Проверяем паттерны слабостей
+      if (adaptivePlan.weaknessTargets && adaptivePlan.weaknessTargets.length > 0) {
+        const detectedWeakness = this.detectWeaknessInResponse(response, adaptivePlan.weaknessTargets);
+        if (detectedWeakness) {
+          const intervention = adaptivePlan.interventions?.find(i => 
+            i.targetWeakness === detectedWeakness
+          );
+          
+          if (intervention) {
+            recommendations.push({
+              type: 'intervention',
+              priority: 'medium',
+              message: `🎯 Фокус: ${intervention.specificActions?.[0] || 'Улучшение точности наблюдения'}`,
+              target: detectedWeakness
+            });
+          }
+        }
+      }
+      
+      return recommendations;
+      
+    } catch (error) {
+      console.error('Error generating smart recommendations:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Детекция слабости в ответе
+   */
+  detectWeaknessInResponse(response, targetWeaknesses) {
+    const text = response.responses?.currentThoughts?.toLowerCase() || '';
+    
+    // Простая детекция основных слабостей
+    if (targetWeaknesses.includes('moment_capture') && /был|была|обычно|всегда/.test(text)) {
+      return 'moment_capture';
+    }
+    
+    if (targetWeaknesses.includes('specificity') && text.length < 30) {
+      return 'specificity';
+    }
+    
+    if (targetWeaknesses.includes('illusion_detection') && /внутренн.*голос/i.test(text)) {
+      return 'illusion_detection';
+    }
+    
+    if (targetWeaknesses.includes('avoidance') && /ничего|не знаю|не помню/.test(text)) {
+      return 'avoidance';
+    }
+    
+    return null;
   }
 }
 
