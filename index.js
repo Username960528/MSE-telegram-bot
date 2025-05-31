@@ -40,25 +40,18 @@ bot.on('message', async (msg) => {
     const surveyCommand = commands.get('survey');
     const settingsCommand = commands.get('settings');
     
-    if (surveyCommand && surveyCommand.surveyStates && surveyCommand.surveyStates.has(telegramId)) {
-      const state = surveyCommand.surveyStates.get(telegramId);
-      const handled = await surveyCommand.handleTextResponse(bot, msg, state);
-      if (handled) return;
-    }
-    
-    if (settingsCommand && settingsCommand.settingsStates && settingsCommand.settingsStates.has(telegramId)) {
-      const handled = await settingsCommand.handleTextResponse(bot, msg);
-      if (handled) return;
-    }
-    
+    // Handle UI keyboard buttons FIRST, before checking survey/settings state
     if (msg.text === '📚 Помощь') {
       const helpCommand = commands.get('help');
       if (helpCommand) helpCommand.execute(bot, msg);
+      return;
     } else if (msg.text === '📊 Памятка') {
       const infoCommand = commands.get('info');
       if (infoCommand) infoCommand.execute(bot, msg);
+      return;
     } else if (msg.text === '🔊 Эхо') {
       bot.sendMessage(msg.chat.id, 'Используйте /echo с текстом. Пример: /echo Привет мир');
+      return;
     } else if (msg.text === '📈 Статистика') {
       const statsCommand = commands.get('stats');
       if (statsCommand) {
@@ -66,17 +59,30 @@ bot.on('message', async (msg) => {
       } else {
         bot.sendMessage(msg.chat.id, 'Команда /stats ещё в разработке');
       }
+      return;
     } else if (msg.text === '🔔 Опрос') {
       const surveyCommand = commands.get('survey');
       if (surveyCommand) {
         surveyCommand.execute(bot, msg);
       }
-    } else if (!msg.text.startsWith('/') && 
-               msg.text !== '📚 Помощь' && 
-               msg.text !== '📊 Памятка' && 
-               msg.text !== '🔊 Эхо' &&
-               msg.text !== '📈 Статистика' &&
-               msg.text !== '🔔 Опрос') {
+      return;
+    }
+    
+    // Now check for survey state AFTER handling UI buttons
+    if (surveyCommand && surveyCommand.surveyStates && surveyCommand.surveyStates.has(telegramId)) {
+      const state = surveyCommand.surveyStates.get(telegramId);
+      const handled = await surveyCommand.handleTextResponse(bot, msg, state);
+      if (handled) return;
+    }
+    
+    // Check for settings state
+    if (settingsCommand && settingsCommand.settingsStates && settingsCommand.settingsStates.has(telegramId)) {
+      const handled = await settingsCommand.handleTextResponse(bot, msg);
+      if (handled) return;
+    }
+    
+    // Handle unrecognized messages
+    if (!msg.text.startsWith('/')) {
       bot.sendMessage(msg.chat.id, `Вы написали: "${msg.text}"\n\nИспользуйте /help или кнопки клавиатуры для просмотра доступных команд.`);
     }
   }
