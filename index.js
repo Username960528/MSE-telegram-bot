@@ -76,6 +76,11 @@ bot.on('message', async (msg) => {
       if (leaderboardCommand) {
         leaderboardCommand.execute(bot, msg);
       }
+    } else if (msg.text === '🧠 Инсайты') {
+      const insightsCommand = commands.get('insights');
+      if (insightsCommand) {
+        insightsCommand.execute(bot, msg);
+      }
     } else if (msg.text === '🔔 Опрос') {
       const surveyCommand = commands.get('survey');
       if (surveyCommand) {
@@ -88,6 +93,7 @@ bot.on('message', async (msg) => {
                msg.text !== '📈 Статистика' &&
                msg.text !== '🏆 Достижения' &&
                msg.text !== '📊 Рейтинги' &&
+               msg.text !== '🧠 Инсайты' &&
                msg.text !== '🔔 Опрос') {
       bot.sendMessage(msg.chat.id, `Вы написали: "${msg.text}"\n\nИспользуйте /help или кнопки клавиатуры для просмотра доступных команд.`);
     }
@@ -144,6 +150,16 @@ bot.on('callback_query', async (query) => {
     if (statsCommand) {
       await bot.answerCallbackQuery(query.id);
       await statsCommand.execute(bot, query.message);
+    }
+  } else if (query.data.startsWith('insights_') || query.data === 'insights_back') {
+    const insightsCommand = commands.get('insights');
+    if (insightsCommand) {
+      if (query.data === 'insights_back') {
+        await bot.answerCallbackQuery(query.id);
+        await insightsCommand.execute(bot, query.message);
+      } else if (insightsCommand.handleCallback) {
+        await insightsCommand.handleCallback(bot, query);
+      }
     }
   } else if (query.data.startsWith('refresh_')) {
     // Обновление различных разделов
