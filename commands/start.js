@@ -49,6 +49,18 @@ module.exports = {
       };
       
       await bot.sendMessage(chatId, welcomeMessage, keyboard);
+      
+      // Для новых пользователей показываем новости о последних обновлениях
+      if (!user.seenLatestNews) {
+        setTimeout(async () => {
+          const newsCommand = require('./news');
+          await newsCommand.execute(bot, msg);
+          
+          // Отмечаем, что пользователь видел новости
+          user.seenLatestNews = true;
+          await user.save();
+        }, 3000);
+      }
     } catch (error) {
       console.error('Error in start command:', error);
       await bot.sendMessage(chatId, 'Произошла ошибка при регистрации. Попробуйте позже.');

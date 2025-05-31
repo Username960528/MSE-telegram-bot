@@ -135,6 +135,12 @@ const userSchema = new mongoose.Schema({
     }
   },
 
+  // Отслеживание просмотра новостей
+  seenLatestNews: {
+    type: Boolean,
+    default: false
+  },
+
   // Геймификация: стрики и прогресс
   streaks: {
     current: {

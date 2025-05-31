@@ -639,7 +639,8 @@ async function completeSurvey(bot, chatId, telegramId) {
           keyboard: [
             ['📚 Помощь', '📊 Памятка'],
             ['🏆 Достижения', '📊 Рейтинги'],
-            ['🧠 Инсайты', '📈 Статистика']
+            ['🧠 Инсайты', '📰 Новости'],
+            ['📈 Статистика']
           ],
           resize_keyboard: true
         }
