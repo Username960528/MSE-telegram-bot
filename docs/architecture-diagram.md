@@ -12,7 +12,7 @@ graph TB
     end
     
     subgraph "📋 Команды"
-        START[/start - Регистрация]
+        START[start - Регистрация]
         SURVEY[/survey - Опрос]
         STATS[/stats - Статистика]
         SETTINGS[/settings - Настройки]
