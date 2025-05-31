@@ -2,6 +2,8 @@ const config = require('../config/hurlburt');
 const goldenExamples = require('../config/golden-examples-config');
 const crypto = require('crypto');
 const { startValidation, endValidation, recordValidationError, recordAIUsage, recordCacheHit, recordCacheMiss } = require('../utils/metrics');
+const SemanticCache = require('./semantic-cache');
+const SemanticAnalysisMonitor = require('./semantic-monitor');
 
 // Graceful shutdown handler
 process.on('SIGINT', () => {
@@ -25,6 +27,13 @@ class AIValidatorService {
     this.rateLimiter = new Map(); // Rate limiting для предотвращения злоупотреблений
     this.requestQueue = []; // Очередь запросов
     this.isProcessingQueue = false;
+    
+    // Новые компоненты для 10/10 производительности
+    this.semanticCache = new SemanticCache({
+      ttl: 300000, // 5 минут
+      maxSize: 2000
+    });
+    this.monitor = new SemanticAnalysisMonitor();
     
     // Настройки по умолчанию
     this.defaultSettings = {
@@ -503,6 +512,138 @@ class AIValidatorService {
     } catch (error) {
       console.error('Failed to generate follow-up:', error);
       return null;
+    }
+  }
+
+  /**
+   * Анализ семантической схожести для предотвращения дублирования вопросов
+   */
+  async analyzeSemanticSimilarity(candidateQuestion, previousResponses, context = {}) {
+    // Начинаем мониторинг анализа
+    const analysis = this.monitor.startAnalysis({
+      userId: context.userId,
+      questionType: candidateQuestion.clarifies,
+      trainingDay: context.trainingDay,
+      responseCount: Object.keys(previousResponses).length
+    });
+
+    try {
+      // Сначала проверяем семантический кэш
+      const cached = this.semanticCache.get(candidateQuestion, previousResponses, context);
+      if (cached) {
+        this.monitor.endAnalysis(analysis, cached);
+        return cached;
+      }
+
+      // Если ИИ недоступен, используем локальный анализ
+      if (!this.isConfigured || this.provider === 'local') {
+        const result = { shouldAsk: true, confidence: 0.5, reason: 'AI not available' };
+        this.monitor.endAnalysis(analysis, result);
+        return result;
+      }
+
+      // Создаем контекст предыдущих ответов с улучшенной обработкой
+      const responseTexts = Object.values(previousResponses)
+        .map(response => {
+          if (typeof response === 'string') return response;
+          if (response && typeof response.text === 'string') return response.text;
+          return '';
+        })
+        .filter(text => text.length > 0)
+        .join('\n');
+
+      if (!responseTexts.trim()) {
+        const result = { shouldAsk: true, confidence: 0.9, reason: 'No previous responses' };
+        this.monitor.endAnalysis(analysis, result);
+        return result;
+      }
+
+    const prompt = `Анализируй, стоит ли задавать follow-up вопрос на основе предыдущих ответов пользователя.
+
+ПРЕДЫДУЩИЕ ОТВЕТЫ:
+${responseTexts}
+
+КАНДИДАТ НА ВОПРОС:
+"${candidateQuestion.text}"
+Категория: ${candidateQuestion.clarifies}
+
+ЗАДАЧА:
+Определи, была ли концепция, которую уточняет этот вопрос, уже раскрыта в предыдущих ответах.
+
+КРИТЕРИИ ДЛЯ ОТКЛОНЕНИЯ ВОПРОСА:
+- Пользователь уже упомянул конкретное расположение в теле
+- Уже описал качество ощущения (острое, тупое, пульсирующее и т.д.)
+- Уже объяснил модальность восприятия (слышал, видел, чувствовал)
+- Уже указал временные характеристики
+- Уже различил эмоцию от физического ощущения
+- Уже описал характеристики внимания/фокуса
+
+ОСОБЕННОСТИ:
+- Семантически похожие формулировки считай как уже раскрытые
+- "дискомфорт в глазах" = "неприятные ощущения в области глаз"
+- Учитывай контекст всего разговора, не только буквальные совпадения
+
+Отвечай только JSON:
+{
+  "shouldAsk": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "краткое объяснение решения"
+}`;
+
+    try {
+      let result;
+      
+      if (this.provider === 'openai') {
+        const completion = await this.openai.createChatCompletion({
+          model: "gpt-4-turbo-preview", 
+          messages: [
+            { role: "system", content: "Ты эксперт по анализу семантической схожести в контексте ESM исследований. Отвечай только JSON." },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.3, // Низкая температура для консистентности
+          max_tokens: 150
+        });
+        result = completion.data.choices[0].message.content;
+      } else if (this.provider === 'anthropic') {
+        const message = await this.anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 150,
+          temperature: 0.3,
+          messages: [{ role: 'user', content: prompt }]
+        });
+        result = message.content[0].text;
+      }
+
+      // Парсим результат
+      const aiAnalysis = JSON.parse(result);
+      
+      // Валидация результата
+      if (typeof aiAnalysis.shouldAsk !== 'boolean' || 
+          typeof aiAnalysis.confidence !== 'number' || 
+          !aiAnalysis.reason) {
+        throw new Error('Invalid AI response format');
+      }
+
+      // Сохраняем в кэш
+      this.semanticCache.set(candidateQuestion, previousResponses, context, aiAnalysis);
+
+      // Завершаем мониторинг
+      this.monitor.endAnalysis(analysis, aiAnalysis);
+      
+      return aiAnalysis;
+
+    } catch (error) {
+      console.error('Failed to analyze semantic similarity:', error);
+      // Fallback к безопасному варианту
+      const fallbackResult = { shouldAsk: true, confidence: 0.5, reason: 'AI analysis failed' };
+      this.monitor.endAnalysis(analysis, fallbackResult, error);
+      return fallbackResult;
+    }
+    } catch (error) {
+      console.error('Semantic similarity analysis failed:', error);
+      const fallbackResult = { shouldAsk: true, confidence: 0.5, reason: 'Analysis failed' };
+      this.monitor.endAnalysis(analysis, fallbackResult, error);
+      return fallbackResult;
     }
   }
 

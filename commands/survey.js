@@ -201,8 +201,8 @@ async function startSurvey(bot, chatId, telegramId, notificationId = null) {
 }
 
 // Функция для генерации follow-up вопросов через стратегию
-function getFollowUpQuestion(context) {
-  return followUpStrategy.getNextQuestion(context);
+async function getFollowUpQuestion(context) {
+  return await followUpStrategy.getNextQuestion(context);
 }
 
 // Модифицированная функция для задавания вопросов
@@ -219,7 +219,7 @@ async function askQuestion(bot, chatId, telegramId, questionIndex) {
       trainingDay: state.trainingDay
     };
     
-    const followUpQuestion = getFollowUpQuestion(context);
+    const followUpQuestion = await getFollowUpQuestion(context);
     if (followUpQuestion && !state.askedFollowUps?.includes(followUpQuestion.clarifies)) {
       state.followUpPending = true;
       state.currentFollowUp = followUpQuestion;
@@ -877,7 +877,7 @@ async function sendEducationalFeedback(bot, chatId, validation, context) {
  */
 async function checkForFollowUp(bot, chatId, state, context) {
   // Используем стратегию follow-up
-  const followUp = followUpStrategy.getNextQuestion({
+  const followUp = await followUpStrategy.getNextQuestion({
     responses: state.responses,
     currentQuestion: state.currentQuestion,
     userId: state.userId,
