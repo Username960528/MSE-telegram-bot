@@ -364,7 +364,9 @@ class MomentValidator {
     // Проверяем фокус на настоящем моменте
     if (!responses.moment_capture) return 50;
     
-    const text = responses.moment_capture.toLowerCase();
+    // Handle both string and object formats
+    const momentCapture = responses.moment_capture;
+    const text = (typeof momentCapture === 'string' ? momentCapture : momentCapture.text).toLowerCase();
     const momentWords = this.config.positive.momentary;
     const retroWords = this.config.garbage.retrospective;
     
@@ -397,7 +399,9 @@ class MomentValidator {
     const mood = responses.mood;
     const stress = responses.stress;
     const energy = responses.energy;
-    const text = (responses.moment_capture || '').toLowerCase();
+    // Handle both string and object formats
+    const momentCapture = responses.moment_capture || '';
+    const text = (typeof momentCapture === 'string' ? momentCapture : momentCapture.text || '').toLowerCase();
 
     let consistencyScore = 100;
 
@@ -424,7 +428,9 @@ class MomentValidator {
 
   calculateBrevity(responses) {
     // Оцениваем краткость (не перегруженность деталями)
-    const momentText = responses.moment_capture || '';
+    // Handle both string and object formats
+    const momentCapture = responses.moment_capture || '';
+    const momentText = typeof momentCapture === 'string' ? momentCapture : momentCapture.text || '';
     const activityText = responses.currentActivity || '';
     
     const totalLength = momentText.length + activityText.length;

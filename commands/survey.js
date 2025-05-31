@@ -467,7 +467,10 @@ async function completeSurvey(bot, chatId, telegramId) {
     // Детектируем феномены Херлберта
     const phenomenaDetected = [];
     if (state.responses.moment_capture) {
-      phenomenaDetected.push(...validator.detectHurlburtPhenomena(state.responses.moment_capture));
+      // Handle both string and object formats
+      const momentCapture = state.responses.moment_capture;
+      const text = typeof momentCapture === 'string' ? momentCapture : momentCapture.text;
+      phenomenaDetected.push(...validator.detectHurlburtPhenomena(text));
     }
 
     // Сохраняем ответы в структуру, совместимую с текущей схемой
@@ -476,7 +479,7 @@ async function completeSurvey(bot, chatId, telegramId) {
       energy: state.responses.energy,
       stress: state.responses.stress,
       focus: state.responses.concentration, // Мапим concentration на focus
-      currentThoughts: state.responses.moment_capture,
+      currentThoughts: typeof state.responses.moment_capture === 'string' ? state.responses.moment_capture : state.responses.moment_capture?.text,
       currentActivity: state.responses.currentActivity,
       currentEmotions: state.responses.currentCompanion || '' // Правильное поле для эмоций
     };
