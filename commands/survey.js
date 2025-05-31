@@ -480,8 +480,8 @@ async function completeSurvey(bot, chatId, telegramId) {
       stress: state.responses.stress,
       focus: state.responses.concentration, // Мапим concentration на focus
       currentThoughts: typeof state.responses.moment_capture === 'string' ? state.responses.moment_capture : state.responses.moment_capture?.text,
-      currentActivity: state.responses.currentActivity,
-      currentEmotions: state.responses.currentCompanion || '' // Правильное поле для эмоций
+      currentActivity: typeof state.responses.currentActivity === 'string' ? state.responses.currentActivity : state.responses.currentActivity?.text || '',
+      currentEmotions: typeof state.responses.currentCompanion === 'string' ? state.responses.currentCompanion : state.responses.currentCompanion?.text || ''
     };
 
     // Сохраняем дополнительные данные в metadata
@@ -507,9 +507,22 @@ async function completeSurvey(bot, chatId, telegramId) {
         .map(([key, value]) => ({ timestamp: key.split('_')[1], answer: value })),
       
       // Дополнительные поля
-      currentCompanion: state.responses.currentCompanion,
+      currentCompanion: typeof state.responses.currentCompanion === 'string' ? state.responses.currentCompanion : state.responses.currentCompanion?.text || '',
       responseTime: Math.round((Date.now() - state.startTime) / 1000),
-      validationAttempts: state.validationAttempts
+      validationAttempts: state.validationAttempts,
+      
+      // Required schema fields with defaults
+      dataReliability: {
+        reliabilityScore: qualityScore,
+        junkDataFlags: [],
+        excludeFromAnalysis: false
+      },
+      learningProgress: {
+        conceptsUnderstood: [],
+        illusionsBroken: [],
+        skillsAcquired: [],
+        breakthroughMoments: []
+      }
     };
 
     response.responseCompletedAt = new Date();
