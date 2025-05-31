@@ -245,7 +245,8 @@ async function askQuestion(bot, chatId, telegramId, questionIndex) {
 
   if (question.type === 'scale') {
     const text = `${question.text}\n\n${question.scale.minLabel} ← → ${question.scale.maxLabel}`;
-    await bot.sendMessage(chatId, text, createScaleKeyboard(question.scale.min, question.scale.max));
+    const keyboardOptions = createScaleKeyboard(question.scale.min, question.scale.max);
+    await bot.sendMessage(chatId, text, keyboardOptions);
   } else {
     await bot.sendMessage(chatId, question.text, {
       reply_markup: {
