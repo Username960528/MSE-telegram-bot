@@ -507,6 +507,101 @@ class AIValidatorService {
   }
 
   /**
+   * Анализ семантической схожести для предотвращения дублирования вопросов
+   */
+  async analyzeSemanticSimilarity(candidateQuestion, previousResponses, context = {}) {
+    if (!this.isConfigured || this.provider === 'local') {
+      return { shouldAsk: true, confidence: 0.5, reason: 'AI not available' };
+    }
+
+    // Создаем контекст предыдущих ответов
+    const responseTexts = Object.values(previousResponses)
+      .filter(text => typeof text === 'string' && text.length > 0)
+      .join('\n');
+
+    if (!responseTexts.trim()) {
+      return { shouldAsk: true, confidence: 0.9, reason: 'No previous responses' };
+    }
+
+    const prompt = `Анализируй, стоит ли задавать follow-up вопрос на основе предыдущих ответов пользователя.
+
+ПРЕДЫДУЩИЕ ОТВЕТЫ:
+${responseTexts}
+
+КАНДИДАТ НА ВОПРОС:
+"${candidateQuestion.text}"
+Категория: ${candidateQuestion.clarifies}
+
+ЗАДАЧА:
+Определи, была ли концепция, которую уточняет этот вопрос, уже раскрыта в предыдущих ответах.
+
+КРИТЕРИИ ДЛЯ ОТКЛОНЕНИЯ ВОПРОСА:
+- Пользователь уже упомянул конкретное расположение в теле
+- Уже описал качество ощущения (острое, тупое, пульсирующее и т.д.)
+- Уже объяснил модальность восприятия (слышал, видел, чувствовал)
+- Уже указал временные характеристики
+- Уже различил эмоцию от физического ощущения
+- Уже описал характеристики внимания/фокуса
+
+ОСОБЕННОСТИ:
+- Семантически похожие формулировки считай как уже раскрытые
+- "дискомфорт в глазах" = "неприятные ощущения в области глаз"
+- Учитывай контекст всего разговора, не только буквальные совпадения
+
+Отвечай только JSON:
+{
+  "shouldAsk": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "краткое объяснение решения"
+}`;
+
+    try {
+      let result;
+      
+      if (this.provider === 'openai') {
+        const completion = await this.openai.createChatCompletion({
+          model: "gpt-4-turbo-preview", 
+          messages: [
+            { role: "system", content: "Ты эксперт по анализу семантической схожести в контексте ESM исследований. Отвечай только JSON." },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.3, // Низкая температура для консистентности
+          max_tokens: 150
+        });
+        result = completion.data.choices[0].message.content;
+      } else if (this.provider === 'anthropic') {
+        const message = await this.anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 150,
+          temperature: 0.3,
+          messages: [{ role: 'user', content: prompt }]
+        });
+        result = message.content[0].text;
+      }
+
+      // Парсим результат
+      const analysis = JSON.parse(result);
+      
+      // Валидация результата
+      if (typeof analysis.shouldAsk !== 'boolean' || 
+          typeof analysis.confidence !== 'number' || 
+          !analysis.reason) {
+        throw new Error('Invalid AI response format');
+      }
+
+      // Логирование для мониторинга
+      console.log(`AI similarity analysis: ${candidateQuestion.clarifies} -> shouldAsk: ${analysis.shouldAsk}, confidence: ${analysis.confidence}`);
+      
+      return analysis;
+
+    } catch (error) {
+      console.error('Failed to analyze semantic similarity:', error);
+      // Fallback к безопасному варианту
+      return { shouldAsk: true, confidence: 0.5, reason: 'AI analysis failed' };
+    }
+  }
+
+  /**
    * Анализ паттернов пользователя через ИИ
    */
   async analyzeUserPatterns(userId, responses) {

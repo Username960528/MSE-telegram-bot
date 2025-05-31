@@ -1,4 +1,5 @@
 const config = require('../config/hurlburt');
+const aiValidator = require('../services/ai-validator-service');
 
 /**
  * Стратегия динамических follow-up вопросов по методу Херлберта
@@ -212,9 +213,9 @@ class FollowUpStrategy {
   /**
    * Получить следующий follow-up вопрос
    * @param {Object} context - Контекст диалога
-   * @returns {Object|null} - Вопрос или null
+   * @returns {Promise<Object|null>} - Вопрос или null
    */
-  getNextQuestion(context) {
+  async getNextQuestion(context) {
     const { responses, currentQuestion, userId, trainingDay } = context;
     
     // Получаем последний текстовый ответ
@@ -224,8 +225,8 @@ class FollowUpStrategy {
     // Ищем подходящие вопросы
     const candidates = this.findCandidateQuestions(lastTextResponse.text, trainingDay);
     
-    // Фильтруем уже заданные
-    const unseenCandidates = this.filterUnseenQuestions(candidates, userId);
+    // Фильтруем уже заданные (теперь асинхронно)
+    const unseenCandidates = await this.filterUnseenQuestions(candidates, userId, context);
     
     // Выбираем лучший вопрос
     const selectedQuestion = this.selectBestQuestion(unseenCandidates, context);
@@ -307,15 +308,300 @@ class FollowUpStrategy {
   }
 
   /**
-   * Отфильтровать уже заданные вопросы
+   * Отфильтровать уже заданные вопросы (гибридный подход: статические правила + ИИ)
    */
-  filterUnseenQuestions(candidates, userId) {
+  async filterUnseenQuestions(candidates, userId, context) {
     const userQuestions = this.askedQuestions.get(userId) || new Set();
+    const questionMapping = this.getQuestionSemanticMapping();
     
-    return candidates.filter(q => {
+    // Этап 1: Быстрая фильтрация статическими правилами
+    const staticFiltered = candidates.filter(q => {
       const questionId = `${q.category}_${q.clarifies}`;
-      return !userQuestions.has(questionId);
+      
+      // Проверяем, не задавался ли уже этот вопрос
+      if (userQuestions.has(questionId)) {
+        return false;
+      }
+      
+      // Статическая проверка семантических концепций
+      if (context && context.responses) {
+        const semanticConcept = questionMapping[q.clarifies];
+        
+        if (semanticConcept) {
+          // Проверяем, была ли уже раскрыта эта семантическая концепция
+          if (this.hasConceptMentioned(semanticConcept, context.responses)) {
+            return false;
+          }
+        }
+      }
+      
+      return true;
     });
+
+    // Если нет кандидатов после статической фильтрации, возвращаем пустой массив
+    if (staticFiltered.length === 0) {
+      return staticFiltered;
+    }
+
+    // Этап 2: ИИ-фильтрация для сложных случаев (асинхронно)
+    if (config.ai && config.ai.enableSmartValidation && context && context.responses) {
+      return await this.filterWithAI(staticFiltered, context);
+    }
+
+    return staticFiltered;
+  }
+
+  /**
+   * Дополнительная фильтрация с помощью ИИ
+   */
+  async filterWithAI(candidates, context) {
+    try {
+      const aiFilteredCandidates = [];
+
+      // Обрабатываем каждого кандидата через ИИ (но не более 3 для производительности)
+      const candidatesToCheck = candidates.slice(0, 3);
+      
+      for (const candidate of candidatesToCheck) {
+        try {
+          const aiAnalysis = await aiValidator.analyzeSemanticSimilarity(
+            candidate, 
+            context.responses, 
+            { userId: context.userId, trainingDay: context.trainingDay }
+          );
+
+          // Добавляем результат ИИ к кандидату для логирования
+          candidate.aiAnalysis = aiAnalysis;
+
+          // Если ИИ говорит, что нужно задать вопрос, добавляем его
+          if (aiAnalysis.shouldAsk && aiAnalysis.confidence > 0.6) {
+            aiFilteredCandidates.push(candidate);
+          } else {
+            console.log(`AI filtered out question: ${candidate.clarifies} (confidence: ${aiAnalysis.confidence}, reason: ${aiAnalysis.reason})`);
+          }
+        } catch (error) {
+          console.warn(`AI analysis failed for question ${candidate.clarifies}:`, error.message);
+          // При ошибке ИИ добавляем кандидата (fail-safe)
+          aiFilteredCandidates.push(candidate);
+        }
+      }
+
+      // Добавляем оставшихся кандидатов без ИИ-проверки для производительности
+      if (candidates.length > 3) {
+        aiFilteredCandidates.push(...candidates.slice(3));
+      }
+
+      return aiFilteredCandidates;
+    } catch (error) {
+      console.error('AI filtering failed, falling back to static filtering:', error);
+      return candidates; // Fallback к статической фильтрации
+    }
+  }
+
+  /**
+   * Извлечь упомянутые части тела из текста
+   */
+  extractBodyParts(text) {
+    const bodyParts = [
+      'глаз', 'глазах', 'глазу', 'глаза',
+      'голов', 'голове', 'голову', 'голова',
+      'груд', 'груди', 'грудь', 'грудью',
+      'живот', 'животе', 'живота',
+      'рук', 'руке', 'руки', 'руку', 'рука',
+      'ног', 'ноге', 'ноги', 'ногу', 'нога',
+      'спин', 'спине', 'спина', 'спину',
+      'шее', 'шея', 'шею',
+      'горле', 'горло', 'горла',
+      'плеч', 'плече', 'плечо', 'плеча',
+      'лице', 'лицо', 'лица',
+      'затылк', 'затылке', 'затылок',
+      'лбу', 'лоб', 'лба'
+    ];
+    
+    const foundParts = [];
+    const lowerText = text.toLowerCase();
+    
+    for (const part of bodyParts) {
+      if (lowerText.includes(part)) {
+        foundParts.push(part);
+      }
+    }
+    
+    return foundParts;
+  }
+
+  /**
+   * Проверить, была ли уже упомянута локация тела
+   */
+  hasBodyLocationMentioned(responses) {
+    const allResponses = Object.values(responses).join(' ');
+    const bodyParts = this.extractBodyParts(allResponses);
+    return bodyParts.length > 0;
+  }
+
+  /**
+   * Семантический анализатор для определения уже раскрытых концепций
+   */
+  getSemanticConcepts() {
+    return {
+      // Расположение (уже реализовано выше)
+      location: {
+        patterns: [
+          /в\s+(глаз|голов|груд|живот|рук|ног|спин|шее|горле|плеч|лице|затылк|лбу)/i,
+          /на\s+(лице|руке|ноге|спине)/i,
+          /(слева|справа|сверху|снизу|внутри|снаружи)/i
+        ],
+        checker: (responses) => this.hasBodyLocationMentioned(responses)
+      },
+      
+      // Качество ощущений
+      quality: {
+        patterns: [
+          /(острое|тупое|пульсирующее|постоянное|ноющее|режущее|давящее|жгучее)/i,
+          /(сильное|слабое|умеренное|интенсивное)/i,
+          /(холодное|теплое|горячее|прохладное)/i
+        ],
+        checker: (responses) => this.hasQualityMentioned(responses)
+      },
+      
+      // Модальность восприятия  
+      modality: {
+        patterns: [
+          /(слышал|видел|чувствовал|ощущал|понимал|знал)/i,
+          /(голос|звук|образ|картин|визуализ)/i,
+          /(внутренний\s+голос|внутренняя\s+речь)/i
+        ],
+        checker: (responses) => this.hasModalityMentioned(responses)
+      },
+      
+      // Временные характеристики
+      timing: {
+        patterns: [
+          /(в\s+момент|именно\s+тогда|прямо\s+сейчас|в\s+тот\s+момент)/i,
+          /(сначала|потом|после|до\s+того|одновременно)/i,
+          /(мгновенно|постепенно|резко|медленно)/i
+        ],
+        checker: (responses) => this.hasTimingMentioned(responses)
+      },
+      
+      // Эмоциональные vs физические проявления
+      emotion_vs_physical: {
+        patterns: [
+          /(физическое|телесное|ощущение|чувство\s+в\s+теле)/i,
+          /(мысль|эмоция|переживание|состояние)/i,
+          /(отличить|различить|разделить)/i
+        ],
+        checker: (responses) => this.hasEmotionDistinctionMentioned(responses)
+      },
+      
+      // Характеристики внимания/фокуса
+      attention: {
+        patterns: [
+          /(сконцентрирован|сфокусирован|внимание\s+на)/i,
+          /(один\s+объект|несколько\s+объектов|рассеянно)/i,
+          /(четко|размыто|ясно|неясно)/i
+        ],
+        checker: (responses) => this.hasAttentionMentioned(responses)
+      }
+    };
+  }
+
+  /**
+   * Проверка упоминания качества ощущений
+   */
+  hasQualityMentioned(responses) {
+    const allText = Object.values(responses).join(' ').toLowerCase();
+    const qualityWords = ['острое', 'тупое', 'пульсирующее', 'постоянное', 'ноющее', 'режущее', 'давящее', 'жгучее', 'сильное', 'слабое', 'умеренное', 'интенсивное', 'холодное', 'теплое', 'горячее', 'прохладное'];
+    return qualityWords.some(word => allText.includes(word));
+  }
+
+  /**
+   * Проверка упоминания модальности
+   */
+  hasModalityMentioned(responses) {
+    const allText = Object.values(responses).join(' ').toLowerCase();
+    const modalityWords = ['слышал', 'видел', 'чувствовал', 'ощущал', 'понимал', 'знал', 'голос', 'звук', 'образ', 'картин', 'визуализ'];
+    return modalityWords.some(word => allText.includes(word));
+  }
+
+  /**
+   * Проверка упоминания временных характеристик
+   */
+  hasTimingMentioned(responses) {
+    const allText = Object.values(responses).join(' ').toLowerCase();
+    const timingWords = ['в момент', 'именно тогда', 'прямо сейчас', 'в тот момент', 'сначала', 'потом', 'после', 'до того', 'одновременно', 'мгновенно', 'постепенно', 'резко', 'медленно'];
+    return timingWords.some(phrase => allText.includes(phrase));
+  }
+
+  /**
+   * Проверка различения эмоций и физических проявлений
+   */
+  hasEmotionDistinctionMentioned(responses) {
+    const allText = Object.values(responses).join(' ').toLowerCase();
+    const distinctionWords = ['физическое', 'телесное', 'ощущение', 'мысль', 'эмоция', 'переживание', 'отличить', 'различить', 'разделить'];
+    return distinctionWords.some(word => allText.includes(word));
+  }
+
+  /**
+   * Проверка упоминания характеристик внимания
+   */
+  hasAttentionMentioned(responses) {
+    const allText = Object.values(responses).join(' ').toLowerCase();
+    const attentionWords = ['сконцентрирован', 'сфокусирован', 'внимание на', 'один объект', 'несколько объектов', 'рассеянно', 'четко', 'размыто', 'ясно', 'неясно'];
+    return attentionWords.some(phrase => allText.includes(phrase));
+  }
+
+  /**
+   * Проверить, была ли уже раскрыта определенная концепция
+   */
+  hasConceptMentioned(conceptName, responses) {
+    const concepts = this.getSemanticConcepts();
+    const concept = concepts[conceptName];
+    
+    if (!concept || !concept.checker) {
+      return false;
+    }
+    
+    return concept.checker(responses);
+  }
+
+  /**
+   * Получить маппинг типов вопросов к семантическим концепциям
+   */
+  getQuestionSemanticMapping() {
+    return {
+      // Вопросы о расположении
+      'sensation_precision': 'location',
+      'emotion_location': 'location', 
+      'voice_location': 'location',
+      'image_location': 'location',
+      'anxiety_location': 'location',
+      
+      // Вопросы о качестве ощущений
+      'sensation_quality': 'quality',
+      'emotion_sensory': 'quality',
+      
+      // Вопросы о модальности восприятия
+      'reading_modality': 'modality',
+      'inner_speech_illusion': 'modality',
+      'unsymbolized_thinking': 'modality',
+      'voice_characteristics': 'modality',
+      'memory_modality': 'modality',
+      'image_quality': 'modality',
+      
+      // Вопросы о времени
+      'memory_timing': 'timing',
+      'reading_precision': 'timing',
+      
+      // Вопросы о различении эмоций и физических проявлений
+      'emotion_vs_thought': 'emotion_vs_physical',
+      'anger_physical': 'emotion_vs_physical',
+      
+      // Вопросы о внимании
+      'attention_focus': 'attention',
+      
+      // Вопросы о планировании (не блокируем, так как могут быть разные аспекты)
+      'planning_vs_doing': null
+    };
   }
 
   /**
