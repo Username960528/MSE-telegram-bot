@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const addressForms = require('../utils/addressForms');
 
 const settingsStates = new Map();
 
@@ -16,6 +17,9 @@ module.exports = {
         return;
       }
 
+      const addressForm = user.preferences?.addressForm || 'informal';
+      const addressFormText = addressForm === 'informal' ? 'ты' : 'Вы';
+
       const keyboard = {
         inline_keyboard: [
           [{ text: `🔔 Уведомления: ${user.settings.notificationsEnabled ? 'Вкл' : 'Выкл'}`, callback_data: 'settings_toggle_notifications' }],
@@ -23,17 +27,22 @@ module.exports = {
           [{ text: `⏰ Время начала: ${user.settings.notificationStartTime}`, callback_data: 'settings_start_time' }],
           [{ text: `⏰ Время окончания: ${user.settings.notificationEndTime}`, callback_data: 'settings_end_time' }],
           [{ text: `🌍 Часовой пояс: ${user.settings.timezone}`, callback_data: 'settings_timezone' }],
+          [{ text: `💬 Обращение: ${addressFormText}`, callback_data: 'settings_address_form' }],
           [{ text: '❌ Закрыть', callback_data: 'settings_close' }]
         ]
       };
 
-      const message = `⚙️ *Настройки уведомлений*\n\n` +
+      const message = addressForms.formatForUser(
+        `⚙️ *Настройки*\n\n` +
         `Текущие параметры:\n` +
         `• Уведомления: ${user.settings.notificationsEnabled ? 'Включены' : 'Выключены'}\n` +
         `• Количество в день: ${user.settings.notificationsPerDay}\n` +
         `• Время: ${user.settings.notificationStartTime} - ${user.settings.notificationEndTime}\n` +
-        `• Часовой пояс: ${user.settings.timezone}\n\n` +
-        `Выберите параметр для изменения:`;
+        `• Часовой пояс: ${user.settings.timezone}\n` +
+        `• Обращение: ${addressFormText}\n\n` +
+        `Выбери параметр для изменения:`,
+        user
+      );
 
       bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
@@ -151,11 +160,42 @@ module.exports = {
         
         // Refresh settings menu
         module.exports.execute(bot, query.message);
-        
+
+      } else if (data === 'settings_address_form') {
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: 'ты (неформальное)', callback_data: 'settings_address_informal' }],
+            [{ text: 'Вы (формальное)', callback_data: 'settings_address_formal' }],
+            [{ text: '⬅️ Назад', callback_data: 'settings_back' }]
+          ]
+        };
+
+        await bot.editMessageText(
+          addressForms.formatForUser('Выбери форму обращения:', user),
+          {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            reply_markup: keyboard
+          }
+        );
+
+      } else if (data.startsWith('settings_address_')) {
+        const addressForm = data === 'settings_address_informal' ? 'informal' : 'formal';
+        user.preferences.addressForm = addressForm;
+        await user.save();
+
+        const addressFormText = addressForm === 'informal' ? 'ты' : 'Вы';
+        await bot.answerCallbackQuery(query.id, {
+          text: `Форма обращения изменена на "${addressFormText}"`
+        });
+
+        // Refresh settings menu
+        module.exports.execute(bot, query.message);
+
       } else if (data === 'settings_back') {
         // Refresh settings menu
         module.exports.execute(bot, query.message);
-        
+
       } else if (data === 'settings_close') {
         await bot.deleteMessage(chatId, query.message.message_id);
         await bot.answerCallbackQuery(query.id);

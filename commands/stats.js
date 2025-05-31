@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Response = require('../models/Response');
+const addressForms = require('../utils/addressForms');
 
 // Эмодзи для визуализации прогресса
 const progressEmojis = {
@@ -39,10 +40,12 @@ async function showStats(bot, chatId, telegramId) {
     }).sort({ timestamp: -1 });
 
     if (responses.length === 0) {
-      bot.sendMessage(chatId, 
-        '📊 У вас пока нет данных.\n\n' +
-        'Начните с команды /survey для первого опроса!'
+      const message = addressForms.formatForUser(
+        '📊 У тебя пока нет данных.\n\n' +
+        'Начни с команды /survey для первого опроса!',
+        user
       );
+      bot.sendMessage(chatId, message);
       return;
     }
 
@@ -105,7 +108,7 @@ async function showStats(bot, chatId, telegramId) {
     const isStillTraining = currentTrainingDay < 3;
 
     // Создаём сообщение
-    let message = `📊 **Ваша статистика ESM**\n\n`;
+    let message = addressForms.formatForUser(`📊 **Твоя статистика ESM**\n\n`, user);
     
     // Статус обучения
     if (isStillTraining) {
@@ -176,23 +179,25 @@ async function showStats(bot, chatId, telegramId) {
     }
 
     // Рекомендации
-    message += `🎯 **Рекомендации:**\n`;
-    
+    let recommendations = `🎯 **Рекомендации:**\n`;
+
     if (isStillTraining) {
-      message += `• Продолжайте обучение - осталось ${3 - currentTrainingDay} ${currentTrainingDay === 2 ? 'день' : 'дня'}\n`;
-      message += `• Фокусируйтесь на МОМЕНТЕ сигнала\n`;
-      message += `• Избегайте обобщений типа "обычно", "всегда"\n`;
+      recommendations += `• Продолжай обучение - осталось ${3 - currentTrainingDay} ${currentTrainingDay === 2 ? 'день' : 'дня'}\n`;
+      recommendations += `• Фокусируйся на МОМЕНТЕ сигнала\n`;
+      recommendations += `• Избегай обобщений типа "обычно", "всегда"\n`;
     } else {
       if (countQuality > 0 && totalQuality / countQuality < 60) {
-        message += `• Старайтесь описывать конкретные детали момента\n`;
-        message += `• Добавляйте сенсорную информацию (что видели/слышали)\n`;
+        recommendations += `• Старайся описывать конкретные детали момента\n`;
+        recommendations += `• Добавляй сенсорную информацию (что видел/слышал)\n`;
       } else {
-        message += `• Отличная работа! Продолжайте в том же духе\n`;
-        message += `• Ваши данные точно отражают моментальный опыт\n`;
+        recommendations += `• Отличная работа! Продолжай в том же духе\n`;
+        recommendations += `• Твои данные точно отражают моментальный опыт\n`;
       }
     }
 
-    message += `\n💬 Используйте /survey для нового опроса`;
+    recommendations += `\n💬 Используй /survey для нового опроса`;
+
+    message += addressForms.formatForUser(recommendations, user);
 
     await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 
