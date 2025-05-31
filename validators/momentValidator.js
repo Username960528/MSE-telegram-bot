@@ -459,7 +459,7 @@ class MomentValidator {
     if (diff <= 1 && challenge >= 5 && skill >= 5) return 'flow';
     if (challenge > skill + 2) return 'anxiety';
     if (skill > challenge + 2) return 'boredom';
-    return 'neutral';
+    return null;
   }
 }
 
