@@ -2,6 +2,8 @@ const config = require('../config/hurlburt');
 const goldenExamples = require('../config/golden-examples-config');
 const crypto = require('crypto');
 const { startValidation, endValidation, recordValidationError, recordAIUsage, recordCacheHit, recordCacheMiss } = require('../utils/metrics');
+const SemanticCache = require('./semantic-cache');
+const SemanticAnalysisMonitor = require('./semantic-monitor');
 
 // Graceful shutdown handler
 process.on('SIGINT', () => {
@@ -25,6 +27,13 @@ class AIValidatorService {
     this.rateLimiter = new Map(); // Rate limiting для предотвращения злоупотреблений
     this.requestQueue = []; // Очередь запросов
     this.isProcessingQueue = false;
+    
+    // Новые компоненты для 10/10 производительности
+    this.semanticCache = new SemanticCache({
+      ttl: 300000, // 5 минут
+      maxSize: 2000
+    });
+    this.monitor = new SemanticAnalysisMonitor();
     
     // Настройки по умолчанию
     this.defaultSettings = {
@@ -510,18 +519,44 @@ class AIValidatorService {
    * Анализ семантической схожести для предотвращения дублирования вопросов
    */
   async analyzeSemanticSimilarity(candidateQuestion, previousResponses, context = {}) {
-    if (!this.isConfigured || this.provider === 'local') {
-      return { shouldAsk: true, confidence: 0.5, reason: 'AI not available' };
-    }
+    // Начинаем мониторинг анализа
+    const analysis = this.monitor.startAnalysis({
+      userId: context.userId,
+      questionType: candidateQuestion.clarifies,
+      trainingDay: context.trainingDay,
+      responseCount: Object.keys(previousResponses).length
+    });
 
-    // Создаем контекст предыдущих ответов
-    const responseTexts = Object.values(previousResponses)
-      .filter(text => typeof text === 'string' && text.length > 0)
-      .join('\n');
+    try {
+      // Сначала проверяем семантический кэш
+      const cached = this.semanticCache.get(candidateQuestion, previousResponses, context);
+      if (cached) {
+        this.monitor.endAnalysis(analysis, cached);
+        return cached;
+      }
 
-    if (!responseTexts.trim()) {
-      return { shouldAsk: true, confidence: 0.9, reason: 'No previous responses' };
-    }
+      // Если ИИ недоступен, используем локальный анализ
+      if (!this.isConfigured || this.provider === 'local') {
+        const result = { shouldAsk: true, confidence: 0.5, reason: 'AI not available' };
+        this.monitor.endAnalysis(analysis, result);
+        return result;
+      }
+
+      // Создаем контекст предыдущих ответов с улучшенной обработкой
+      const responseTexts = Object.values(previousResponses)
+        .map(response => {
+          if (typeof response === 'string') return response;
+          if (response && typeof response.text === 'string') return response.text;
+          return '';
+        })
+        .filter(text => text.length > 0)
+        .join('\n');
+
+      if (!responseTexts.trim()) {
+        const result = { shouldAsk: true, confidence: 0.9, reason: 'No previous responses' };
+        this.monitor.endAnalysis(analysis, result);
+        return result;
+      }
 
     const prompt = `Анализируй, стоит ли задавать follow-up вопрос на основе предыдущих ответов пользователя.
 
@@ -580,24 +615,35 @@ ${responseTexts}
       }
 
       // Парсим результат
-      const analysis = JSON.parse(result);
+      const aiAnalysis = JSON.parse(result);
       
       // Валидация результата
-      if (typeof analysis.shouldAsk !== 'boolean' || 
-          typeof analysis.confidence !== 'number' || 
-          !analysis.reason) {
+      if (typeof aiAnalysis.shouldAsk !== 'boolean' || 
+          typeof aiAnalysis.confidence !== 'number' || 
+          !aiAnalysis.reason) {
         throw new Error('Invalid AI response format');
       }
 
-      // Логирование для мониторинга
-      console.log(`AI similarity analysis: ${candidateQuestion.clarifies} -> shouldAsk: ${analysis.shouldAsk}, confidence: ${analysis.confidence}`);
+      // Сохраняем в кэш
+      this.semanticCache.set(candidateQuestion, previousResponses, context, aiAnalysis);
+
+      // Завершаем мониторинг
+      this.monitor.endAnalysis(analysis, aiAnalysis);
       
-      return analysis;
+      return aiAnalysis;
 
     } catch (error) {
       console.error('Failed to analyze semantic similarity:', error);
       // Fallback к безопасному варианту
-      return { shouldAsk: true, confidence: 0.5, reason: 'AI analysis failed' };
+      const fallbackResult = { shouldAsk: true, confidence: 0.5, reason: 'AI analysis failed' };
+      this.monitor.endAnalysis(analysis, fallbackResult, error);
+      return fallbackResult;
+    }
+    } catch (error) {
+      console.error('Semantic similarity analysis failed:', error);
+      const fallbackResult = { shouldAsk: true, confidence: 0.5, reason: 'Analysis failed' };
+      this.monitor.endAnalysis(analysis, fallbackResult, error);
+      return fallbackResult;
     }
   }
 
