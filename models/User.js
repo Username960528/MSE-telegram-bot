@@ -127,7 +127,12 @@ const userSchema = new mongoose.Schema({
     showExamples: { type: Boolean, default: true },
     adaptiveQuestions: { type: Boolean, default: true },
     trainingReminders: { type: Boolean, default: true },
-    useAIValidation: { type: Boolean, default: true }
+    useAIValidation: { type: Boolean, default: true },
+    addressForm: {
+      type: String,
+      enum: ['informal', 'formal'],
+      default: 'informal'
+    }
   },
 
   // Геймификация: стрики и прогресс

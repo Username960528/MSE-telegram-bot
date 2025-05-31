@@ -8,6 +8,7 @@ const FollowUpStrategy = require('../strategies/followUpStrategy');
 const PatternFeedback = require('../helpers/patternFeedback');
 const GamificationService = require('../services/gamification-service');
 const { recordUserResponse, recordTrainingCompletion, recordTrainingDropout, recordIllusionDetected } = require('../utils/metrics');
+const addressForms = require('../utils/addressForms');
 
 const surveyStates = new Map();
 const validator = new MomentValidator();
@@ -63,8 +64,8 @@ const trainingMessages = [
 const questions = [
   {
     id: 'moment_capture',
-    text: '🎯 СТОП! Что происходило в вашем сознании ИМЕННО в момент сигнала?\n\n' +
-          'Опишите не общее состояние дня, а что было ПРЯМО В ТОТ МОМЕНТ.',
+    text: '🎯 СТОП! Что происходило в твоём сознании ИМЕННО в момент сигнала?\n\n' +
+          'Опиши не общее состояние дня, а что было ПРЯМО В ТОТ МОМЕНТ.',
     type: 'text',
     validation: 'pristine',
     priority: true
@@ -77,19 +78,19 @@ const questions = [
   },
   {
     id: 'skill',
-    text: '🛠 В ТОТ МОМЕНТ ваши навыки были:',
+    text: '🛠 В ТОТ МОМЕНТ твои навыки были:',
     type: 'scale',
     scale: { min: 0, max: 9, minLabel: 'Недостаточными', maxLabel: 'Более чем достаточными' }
   },
   {
     id: 'concentration',
-    text: '🎯 Насколько вы были сконцентрированы В ТОТ МОМЕНТ?',
+    text: '🎯 Насколько ты был сконцентрирован В ТОТ МОМЕНТ?',
     type: 'scale',
     scale: { min: 0, max: 9, minLabel: 'Совсем не сконцентрирован', maxLabel: 'Полностью сконцентрирован' }
   },
   {
     id: 'mood',
-    text: '🌈 Какое было ваше состояние В МОМЕНТ сигнала?',
+    text: '🌈 Какое было твоё состояние В МОМЕНТ сигнала?',
     type: 'scale',
     scale: { min: 1, max: 7, minLabel: 'Очень плохое', maxLabel: 'Отличное' }
   },
@@ -107,13 +108,13 @@ const questions = [
   },
   {
     id: 'currentActivity',
-    text: '📝 Что КОНКРЕТНО вы делали? (не "работал", а "печатал email Ивану о проекте X")',
+    text: '📝 Что КОНКРЕТНО ты делал? (не "работал", а "печатал email Ивану о проекте X")',
     type: 'text',
     validation: 'specific'
   },
   {
     id: 'currentCompanion',
-    text: '👥 С кем вы были В ТОТ МОМЕНТ? (или "один")',
+    text: '👥 С кем ты был В ТОТ МОМЕНТ? (или "один")',
     type: 'text'
   }
 ];
@@ -211,6 +212,9 @@ async function askQuestion(bot, chatId, telegramId, questionIndex) {
   const state = surveyStates.get(telegramId);
   if (!state) return;
 
+  // Получаем пользователя для форматирования сообщений
+  const user = await User.findOne({ telegramId });
+
   // Проверяем, не нужен ли follow-up вопрос
   if (!state.followUpPending && Object.keys(state.responses).length > 0) {
     const context = {
@@ -245,11 +249,15 @@ async function askQuestion(bot, chatId, telegramId, questionIndex) {
   state.currentQuestion = questionIndex;
 
   if (question.type === 'scale') {
-    const text = `${question.text}\n\n${question.scale.minLabel} ← → ${question.scale.maxLabel}`;
+    const text = addressForms.formatForUser(
+      `${question.text}\n\n${question.scale.minLabel} ← → ${question.scale.maxLabel}`,
+      user
+    );
     const keyboardOptions = createScaleKeyboard(question.scale.min, question.scale.max);
     await bot.sendMessage(chatId, text, keyboardOptions);
   } else {
-    await bot.sendMessage(chatId, question.text, {
+    const questionText = addressForms.formatForUser(question.text, user);
+    await bot.sendMessage(chatId, questionText, {
       reply_markup: {
         inline_keyboard: [[{ text: '⏭ Пропустить', callback_data: 'survey_skip' }]]
       }
