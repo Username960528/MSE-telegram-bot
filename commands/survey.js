@@ -152,10 +152,14 @@ function calculateDataQuality(responses) {
 // Модифицированная функция начала опроса
 async function startSurvey(bot, chatId, telegramId, notificationId = null) {
   try {
+    console.log(`[SURVEY] Поиск пользователя с telegramId: ${telegramId} (type: ${typeof telegramId})`);
     let user = await User.findOne({ telegramId });
     if (!user) {
+      console.log(`[SURVEY] ОШИБКА: Пользователь НЕ найден! telegramId: ${telegramId}`);
       bot.sendMessage(chatId, 'Пожалуйста, сначала зарегистрируйтесь с помощью команды /start');
       return;
+    } else {
+      console.log(`[SURVEY] Пользователь найден: ${user.firstName} (${user._id})`);
     }
 
     // Определяем день обучения

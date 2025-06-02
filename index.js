@@ -25,10 +25,12 @@ for (const file of commandFiles) {
   
   if (command.pattern) {
     bot.onText(command.pattern, (msg, match) => {
+      console.log(`[CMD] Выполнение команды ${command.command} для пользователя ${msg.from.id} (${msg.from.first_name})`);
       command.execute(bot, msg, match);
     });
   } else {
     bot.onText(new RegExp(`\/${command.command}(?:\s+(.+))?`), (msg, match) => {
+      console.log(`[CMD] Выполнение команды ${command.command} для пользователя ${msg.from.id} (${msg.from.first_name})`);
       const args = match[1] ? match[1].split(' ') : [];
       command.execute(bot, msg, args);
     });
@@ -94,6 +96,7 @@ bot.on('message', async (msg) => {
         newsCommand.execute(bot, msg);
       }
     } else if (msg.text === '🔔 Опрос') {
+      console.log(`[BUTTON] Пользователь ${msg.from.id} (${msg.from.first_name}) нажал кнопку "🔔 Опрос"`);
       const surveyCommand = commands.get('survey');
       if (surveyCommand) {
         surveyCommand.execute(bot, msg);

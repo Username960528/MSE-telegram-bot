@@ -10,9 +10,11 @@ module.exports = {
     const userName = msg.from.first_name || 'User';
     
     try {
+      console.log(`[START] Поиск пользователя с telegramId: ${telegramId} (type: ${typeof telegramId})`);
       let user = await User.findOne({ telegramId });
       
       if (!user) {
+        console.log(`[START] Пользователь не найден, создаем нового`);
         user = new User({
           telegramId,
           username: msg.from.username,
@@ -20,6 +22,9 @@ module.exports = {
           lastName: msg.from.last_name
         });
         await user.save();
+        console.log(`[START] Пользователь создан успешно: ${user._id}`);
+      } else {
+        console.log(`[START] Пользователь найден: ${user.firstName} (${user._id})`);
       }
       
       const welcomeMessage = addressForms.formatForUser(
