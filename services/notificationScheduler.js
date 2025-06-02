@@ -3,11 +3,13 @@ const moment = require('moment-timezone');
 const User = require('../models/User');
 const Response = require('../models/Response');
 const config = require('../config/hurlburt');
+const PushoverService = require('./pushover-service');
 
 class NotificationScheduler {
     constructor(bot) {
         this.bot = bot;
         this.scheduledJobs = new Map();
+        this.pushoverService = new PushoverService();
     }
 
     /**
@@ -180,7 +182,7 @@ class NotificationScheduler {
             });
             await response.save();
             
-            // Send the notification
+            // Send Telegram notification
             const keyboard = {
                 inline_keyboard: [[
                     { text: '📝 Начать опрос', callback_data: `start_survey_${response._id}` },
@@ -194,6 +196,20 @@ class NotificationScheduler {
             await this.bot.sendMessage(user.telegramId, message, {
                 reply_markup: keyboard
             });
+            
+            // Send Pushover notification to watch if enabled
+            if (this.pushoverService.isEnabled(user)) {
+                const pushoverResult = await this.pushoverService.sendSurveyNotification(
+                    user, 
+                    response._id
+                );
+                
+                if (pushoverResult.success) {
+                    console.log(`Pushover notification sent to ${user.getFullName()}`);
+                } else {
+                    console.log(`Pushover notification failed for ${user.getFullName()}: ${pushoverResult.reason}`);
+                }
+            }
             
             console.log(`Notification sent to ${user.getFullName()}`);
             
@@ -461,6 +477,22 @@ class NotificationScheduler {
             await this.bot.sendMessage(user.telegramId, fullMessage, {
                 reply_markup: keyboard
             });
+
+            // Send Pushover escalation notification if enabled
+            if (this.pushoverService.isEnabled(user)) {
+                const pushoverResult = await this.pushoverService.sendEscalationNotification(
+                    user,
+                    message,
+                    level,
+                    response._id
+                );
+                
+                if (pushoverResult.success) {
+                    console.log(`Pushover escalation notification sent to ${user.getFullName()}`);
+                } else {
+                    console.log(`Pushover escalation notification failed for ${user.getFullName()}: ${pushoverResult.reason}`);
+                }
+            }
 
             console.log(`Escalation notification (level ${level}) sent to ${user.getFullName()}`);
 

@@ -35,6 +35,27 @@ const userSchema = new mongoose.Schema({
     timezone: {
       type: String,
       default: 'Europe/Moscow'
+    },
+    // Pushover настройки для уведомлений на часы
+    pushover: {
+      enabled: {
+        type: Boolean,
+        default: false
+      },
+      userKey: {
+        type: String,
+        default: null
+      },
+      priority: {
+        type: Number,
+        default: 1, // High priority для часов
+        min: -2,
+        max: 2
+      },
+      sound: {
+        type: String,
+        default: 'persistent'
+      }
     }
   },
   isActive: {
