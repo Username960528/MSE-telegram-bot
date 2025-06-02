@@ -178,6 +178,16 @@ async function showStats(bot, chatId, telegramId) {
       }
     }
 
+    // Анализ регулярности ответов
+    const last7Days = responses.filter(r => {
+      const daysDiff = (Date.now() - new Date(r.timestamp)) / (1000 * 60 * 60 * 24);
+      return daysDiff <= 7;
+    });
+    const responseRate = uniqueDays > 0 ? (responses.length / uniqueDays).toFixed(1) : 0;
+    
+    // Проверяем настройки Pushover
+    const hasPushover = user.settings.pushover && user.settings.pushover.enabled;
+    
     // Рекомендации
     let recommendations = `🎯 **Рекомендации:**\n`;
 
@@ -192,6 +202,21 @@ async function showStats(bot, chatId, telegramId) {
       } else {
         recommendations += `• Отличная работа! Продолжай в том же духе\n`;
         recommendations += `• Твои данные точно отражают моментальный опыт\n`;
+      }
+    }
+    
+    // Рекомендации по частоте ответов
+    if (responseRate < 3) {
+      recommendations += `\n⚠️ **Низкая частота ответов** (${responseRate}/день):\n`;
+      recommendations += `• Регулярные ответы улучшают качество данных\n`;
+      recommendations += `• Рекомендуется отвечать на 4-6 опросов в день\n`;
+      if (!hasPushover) {
+        recommendations += `• 💡 Настрой уведомления на часы (/pushover) - это повышает отзывчивость на 60%!\n`;
+      }
+    } else if (responseRate >= 4) {
+      recommendations += `\n✅ **Отличная регулярность** (${responseRate}/день)!\n`;
+      if (hasPushover) {
+        recommendations += `• Pushover уведомления помогают поддерживать регулярность\n`;
       }
     }
 

@@ -138,9 +138,18 @@ bot.on('callback_query', async (query) => {
     await notificationScheduler.handleSurveySkip(responseId, query.from.id);
     
     await bot.answerCallbackQuery(query.id, { text: 'Опрос пропущен' });
-    await bot.sendMessage(query.message.chat.id, 
-      'Опрос пропущен. Я напомню вам позже! 👍'
-    );
+    
+    // Проверяем настройки Pushover пользователя
+    const User = require('./models/User');
+    const user = await User.findOne({ telegramId: query.from.id });
+    const hasPushover = user && user.settings.pushover && user.settings.pushover.enabled;
+    
+    let message = 'Опрос пропущен. Я напомню тебе позже! 👍';
+    if (!hasPushover) {
+      message += '\n\n💡 Совет: Настрой уведомления на часы (/pushover) чтобы не пропускать опросы и повысить эффективность практики!';
+    }
+    
+    await bot.sendMessage(query.message.chat.id, message);
   } else if (query.data.startsWith('export_')) {
     const exportCommand = commands.get('export');
     if (exportCommand && exportCommand.handleCallback) {

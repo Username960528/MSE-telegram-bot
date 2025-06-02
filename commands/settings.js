@@ -20,9 +20,14 @@ module.exports = {
       const addressForm = user.preferences?.addressForm || 'informal';
       const addressFormText = addressForm === 'informal' ? 'ты' : 'Вы';
 
+      // Проверяем настройки Pushover
+      const hasPushover = user.settings.pushover && user.settings.pushover.enabled;
+      const pushoverStatus = hasPushover ? '✅ Настроен' : '❌ Не настроен';
+      
       const keyboard = {
         inline_keyboard: [
           [{ text: `🔔 Уведомления: ${user.settings.notificationsEnabled ? 'Вкл' : 'Выкл'}`, callback_data: 'settings_toggle_notifications' }],
+          [{ text: `⌚ Уведомления на часы: ${pushoverStatus}`, callback_data: 'settings_setup_pushover' }],
           [{ text: `📅 Количество в день: ${user.settings.notificationsPerDay}`, callback_data: 'settings_notifications_count' }],
           [{ text: `⏰ Время начала: ${user.settings.notificationStartTime}`, callback_data: 'settings_start_time' }],
           [{ text: `⏰ Время окончания: ${user.settings.notificationEndTime}`, callback_data: 'settings_end_time' }],
@@ -32,14 +37,18 @@ module.exports = {
         ]
       };
 
+      const pushoverText = hasPushover ? '✅ Настроен' : '❌ Не настроен';
+      const pushoverTip = !hasPushover ? '\n\n💡 *Совет:* Настрой уведомления на часы для повышения результативности практики!' : '';
+      
       const message = addressForms.formatForUser(
         `⚙️ *Настройки*\n\n` +
         `Текущие параметры:\n` +
         `• Уведомления: ${user.settings.notificationsEnabled ? 'Включены' : 'Выключены'}\n` +
+        `• Уведомления на часы: ${pushoverText}\n` +
         `• Количество в день: ${user.settings.notificationsPerDay}\n` +
         `• Время: ${user.settings.notificationStartTime} - ${user.settings.notificationEndTime}\n` +
         `• Часовой пояс: ${user.settings.timezone}\n` +
-        `• Обращение: ${addressFormText}\n\n` +
+        `• Обращение: ${addressFormText}${pushoverTip}\n\n` +
         `Выбери параметр для изменения:`,
         user
       );
@@ -73,6 +82,11 @@ module.exports = {
         
         // Refresh settings menu
         module.exports.execute(bot, query.message);
+        
+      } else if (data === 'settings_setup_pushover') {
+        const pushoverCommand = require('./pushover');
+        await pushoverCommand.execute(bot, query.message);
+        await bot.answerCallbackQuery(query.id);
         
       } else if (data === 'settings_notifications_count') {
         const keyboard = {

@@ -649,7 +649,9 @@ async function completeSurvey(bot, chatId, telegramId) {
       feedbackMessage +
       patternInsights +
       scientificFact +
-      `\n\nИспользуйте /stats для просмотра вашей статистики.`,
+      `\n\nИспользуйте /stats для просмотра вашей статистики.` +
+      (state.trainingDay > TRAINING_DAYS && !user?.settings?.pushover?.enabled ? 
+        `\n\n💡 Совет: Настрой уведомления на часы (/pushover) для более стабильной практики!` : ''),
       {
         reply_markup: {
           keyboard: [
