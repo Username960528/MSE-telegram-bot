@@ -28,8 +28,9 @@ for (const file of commandFiles) {
       command.execute(bot, msg, match);
     });
   } else {
-    bot.onText(new RegExp(`\/${command.command}`), (msg, match) => {
-      command.execute(bot, msg, match);
+    bot.onText(new RegExp(`\/${command.command}(?:\s+(.+))?`), (msg, match) => {
+      const args = match[1] ? match[1].split(' ') : [];
+      command.execute(bot, msg, args);
     });
   }
 }
@@ -39,6 +40,7 @@ bot.on('message', async (msg) => {
     const telegramId = msg.from.id;
     const surveyCommand = commands.get('survey');
     const settingsCommand = commands.get('settings');
+    const pushoverCommand = commands.get('pushover');
     
     if (surveyCommand && surveyCommand.surveyStates && surveyCommand.surveyStates.has(telegramId)) {
       const state = surveyCommand.surveyStates.get(telegramId);
@@ -48,6 +50,11 @@ bot.on('message', async (msg) => {
     
     if (settingsCommand && settingsCommand.settingsStates && settingsCommand.settingsStates.has(telegramId)) {
       const handled = await settingsCommand.handleTextResponse(bot, msg);
+      if (handled) return;
+    }
+    
+    if (pushoverCommand && pushoverCommand.handleTextMessage) {
+      const handled = await pushoverCommand.handleTextMessage(bot, msg);
       if (handled) return;
     }
     
@@ -138,6 +145,11 @@ bot.on('callback_query', async (query) => {
     const exportCommand = commands.get('export');
     if (exportCommand && exportCommand.handleCallback) {
       await exportCommand.handleCallback(bot, query);
+    }
+  } else if (query.data.startsWith('pushover_')) {
+    const pushoverCommand = commands.get('pushover');
+    if (pushoverCommand && pushoverCommand.handleCallback) {
+      await pushoverCommand.handleCallback(bot, query);
     }
   } else if (query.data.startsWith('leaderboards') || query.data.includes('leaderboard')) {
     const leaderboardCommand = commands.get('leaderboard');
